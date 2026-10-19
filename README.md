@@ -25,6 +25,65 @@ cd pipeline && uv run python -m labelmeme fixture
 
 The command is idempotent. A second run writes the same bytes.
 
+## Author a template from a real clip
+
+Authoring a template takes five steps. The pipeline does the detection and shaping, and you name the people. All paths below are relative to `pipeline/`. `work/` and `models/` are gitignored.
+
+1. `prep` trims the source and re-encodes it to the frame grid the web app expects. It writes `work/<id>/video.mp4`, `thumb.jpg`, `SOURCE.md` and `video.json`.
+2. `track` finds the cuts and tracks every person. It writes `work/<id>/cuts.json`, `tracks.json`, the contact sheets in `work/<id>/sheets/`, and a `subjects.json` stub. On the first run it downloads `yolo11m.pt` into `models/`.
+3. Open `work/<id>/sheets/overview.jpg`. It shows one crop per track id, captioned with the id and its frame range. When a crop is ambiguous, open `sheets/track_<id>.jpg`, which shows 8 crops spread over that track.
+4. Edit `work/<id>/subjects.json`. Give each person a slug `id`, a display `name`, and the list of track ids that belong to them. Delete the entries for people who are not subjects.
+5. `build` merges and shapes the tracks, writes `web/public/templates/<id>/`, and regenerates `index.json`. Open `work/<id>/sheets/built.jpg` to check the boxes and names on sample frames from every shot.
+
+`track` keeps an existing `cuts.json` and an existing `subjects.json`, so your edits survive a rerun. If the scene detector misses a cut or finds a false one, edit the `frame` values in `cuts.json` and run `track` again. To detect the cuts again, delete `cuts.json`.
+
+The tracker restarts at every cut, so a track id never spans two shots. Track ids have the form `s<shot>-<n>`, for example `s3-2` for track 2 in the third shot. A person who is visible on both sides of a cut has one id per shot, and `subjects.json` lists them all.
+
+### Commands for `tos-lab`
+
+The source is the 720p Tears of Steel film, CC-BY 3.0, (c) Blender Foundation.
+
+```sh
+curl -o tos720.mov https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov
+uv run python -m labelmeme prep tos720.mov --start 225.1 --duration 19.4 --id tos-lab \
+	--title 'Tears of Steel: the lab' \
+	--credit 'Tears of Steel (c) Blender Foundation, CC-BY 3.0, mango.blender.org' \
+	--source-url https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov \
+	--license 'CC-BY 3.0'
+uv run python -m labelmeme track tos-lab
+```
+
+`track` found cuts at frames 228 and 326. These ids went into `work/tos-lab/subjects.json`. The three ids in the street shot (`s2-*`) are not subjects.
+
+```json
+{
+	"subjects": [
+		{"id": "thom", "name": "Thom", "tracks": ["s1-1", "s3-1"]},
+		{"id": "barley", "name": "Barley", "tracks": ["s1-2", "s1-6", "s3-2"]},
+		{"id": "celia", "name": "Celia", "tracks": ["s1-3", "s1-4", "s3-3"]}
+	]
+}
+```
+
+```sh
+uv run python -m labelmeme build tos-lab
+```
+
+Track ids come from your own `track` run. Check them against your `overview.jpg` before you reuse this file.
+
+### Parameters
+
+| Parameter | Value | Where | Why |
+| --- | --- | --- | --- |
+| Scene threshold | 0.3 | `SCENE_THRESHOLD` in `track.py` | On `tos-lab` the two real cuts score 0.53 and 0.45, and no other frame scores above 0.07. |
+| Detector | `yolo11m.pt`, `imgsz=1280`, person class only | `track.py` | 1280 is the native width of the 720p source, so small people still register. |
+| Tracker | ByteTrack, `new_track_thresh: 0.5`, `track_buffer: 48` | `bytetrack_labelmeme.yaml` | A higher new-track threshold gives fewer one-frame ids to sort through. A 48-frame buffer keeps an id through a 2 s occlusion. The other values are the defaults from the Ultralytics 8.4.182 `bytetrack.yaml`. |
+| Max gap | 6 frames | `ShapeParams.max_gap` | `build` fills a gap of up to 6 frames inside one shot by linear interpolation, so a short detector dropout does not make a label flicker. |
+| Min run | 8 frames | `ShapeParams.min_run` | `build` drops a run shorter than 8 frames, because a label that shows for a third of a second cannot be read. |
+| Smoothing window | 5 frames | `ShapeParams.smooth_window` | `build` applies a centered mean inside each run to remove detector jitter. The mean never crosses a run edge, so a box never drifts across a cut. |
+
+When two tracks of one subject overlap on a frame, `build` keeps the larger box and prints a warning with the frame range.
+
 ## Template schema
 
 `web/src/schema.ts` and `pipeline/labelmeme/schema.py` define the wire format. Both describe the same JSON.

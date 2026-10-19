@@ -20,6 +20,16 @@
       "fps": 24,
       "frameCount": 466,
       "subjectCount": 3
+    },
+    {
+      "id": "tos-robot",
+      "title": "Tears of Steel: the robot",
+      "credit": "Tears of Steel (c) Blender Foundation, CC-BY 3.0, mango.blender.org",
+      "width": 1280,
+      "height": 534,
+      "fps": 24,
+      "frameCount": 322,
+      "subjectCount": 3
     }
   ]
 }

@@ -8,9 +8,11 @@ from pathlib import Path
 from labelmeme.fixture import make_fixture
 from labelmeme.prep import PrepSpec, prep
 from labelmeme.schema import SLUG
+from labelmeme.track import track
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 WORK_DIR = PIPELINE_DIR / "work"
+MODELS_DIR = PIPELINE_DIR / "models"
 TEMPLATES_DIR = PIPELINE_DIR.parent / "web" / "public" / "templates"
 
 
@@ -43,6 +45,9 @@ def main() -> None:
     p.add_argument("--license", required=True, help="license of the source, for SOURCE.md")
     p.add_argument("--fps", type=int, default=24)
 
+    t = commands.add_parser("track", help="detect cuts and track people in work/<id>/video.mp4")
+    t.add_argument("id", type=_slug)
+
     args = parser.parse_args()
     match args.command:
         case "fixture":
@@ -54,6 +59,8 @@ def main() -> None:
             )
             command = shlex.join(["uv", "run", "python", "-m", "labelmeme", *sys.argv[1:]])
             print(prep(spec, WORK_DIR / spec.id, command))
+        case "track":
+            track(WORK_DIR / args.id, MODELS_DIR)
 
 
 if __name__ == "__main__":

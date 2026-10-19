@@ -6,7 +6,8 @@ export default defineConfig({
   timeout: 180_000,
   reporter: "list",
   webServer: {
-    command: "npx vite preview --port 4173 --strictPort",
+    command: "npm run build && npx vite preview --port 4173 --strictPort",
+    timeout: 180_000,
     url: "http://localhost:4173/",
     reuseExistingServer: false,
   },

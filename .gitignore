@@ -5,3 +5,8 @@ node_modules/
 __pycache__/
 *.pt
 .DS_Store
+web/node_modules
+web/dist
+pipeline/.venv
+pipeline/work/
+pipeline/models/

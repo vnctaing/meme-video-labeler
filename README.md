@@ -16,7 +16,9 @@ Other commands, run from `web/`:
 | `npm test` | Runs the vitest unit tests in `src/*.test.ts`. |
 | `npm run e2e` | Builds, serves `dist/` with `vite preview` on port 4173, and runs the Playwright specs in `e2e/`. |
 
-The e2e specs need `ffmpeg` and `ffprobe` on the `PATH`. They play the fixture template, export it, and check the MP4. They write `gallery.png`, `editor.png`, `fixture-export.mp4` and `fixture-sheet.png` to `web/test-results/`. The sheet tiles eight exported frames with the frame number drawn on each.
+The e2e specs need `ffmpeg` and `ffprobe` on the `PATH`. For every template in `index.json`, they label each person, play the clip, export it, and check the MP4. They write `gallery.png`, and for each template `<id>-editor.png`, `<id>-export.mp4` and a `<id>/` proof directory, to `web/test-results/`.
+
+The proof script `web/e2e/proof.mjs` checks one exported MP4 against its template. Run it as `node e2e/proof.mjs <exported.mp4> <template-dir> <out-dir>` from `web/`. It prints a `PASS` or `FAIL` line for the H.264 codec, the AAC audio, the frame size, the frame count and the duration, and exits with status 1 on any `FAIL`. It also compares the audio md5 with the source `video.mp4` and prints `INFO` when they differ. It writes `ffprobe.txt` with the exact command and its JSON, `frames.json`, and `sheet.png`, a contact sheet of 8 to 12 frames captioned with the frame number and time. The frames come from the first subject's runs and the cuts in `template.json`. They show the label early and late in its first run, two frames before the run ends, the frame after it ends, inside the gap, the first frame back, inside the next run, and on the last frame. `frames.json` says why each frame was picked.
 
 ### Export runs in the browser
 

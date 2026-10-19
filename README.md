@@ -8,6 +8,32 @@ labelmeme puts your own labels on the people in a short video clip, meme style, 
 cd web && npm install && npm run dev
 ```
 
+Other commands, run from `web/`:
+
+| Command | What it does |
+| --- | --- |
+| `npm run build` | Type-checks the app, the tests and the configs, then writes the production build to `dist/`. |
+| `npm test` | Runs the vitest unit tests in `src/*.test.ts`. |
+| `npm run e2e` | Builds, serves `dist/` with `vite preview` on port 4173, and runs the Playwright specs in `e2e/`. |
+
+The e2e specs need `ffmpeg` and `ffprobe` on the `PATH`. They play the fixture template, export it, and check the MP4. They write `gallery.png`, `editor.png`, `fixture-export.mp4` and `fixture-sheet.png` to `web/test-results/`. The sheet tiles eight exported frames with the frame number drawn on each.
+
+### Export runs in the browser
+
+The **Download MP4** button decodes `video.mp4`, draws each frame and its labels onto a canvas, and encodes the result to H.264 with [mediabunny](https://mediabunny.dev) on top of WebCodecs. The AAC audio track is copied, not re-encoded. The preview and the export call the same `paintFrame` function, so the preview shows the pixels the export writes.
+
+Export needs the WebCodecs H.264 encoder, which in practice means a Chromium browser such as Chrome or Edge. In other browsers the button stays disabled and the page says why.
+
+Playwright runs its bundled `chromium-headless-shell`, which has only a software H.264 encoder. That encoder is enough for the specs. If a future Chromium build drops it, run the specs on Google Chrome instead:
+
+```sh
+PW_CHANNEL=chrome npm run e2e
+```
+
+`PW_CHANNEL` sets the Playwright `channel`. Leave it unset to use the bundled headless shell.
+
+Labels use the Anton font from `web/public/fonts/` (SIL Open Font License, see `web/public/fonts/LICENSE`), with Impact as the fallback.
+
 ## Run the pipeline
 
 The pipeline needs [uv](https://docs.astral.sh/uv/) and `ffmpeg`/`ffprobe` on the `PATH`.

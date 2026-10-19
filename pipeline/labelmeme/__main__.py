@@ -5,9 +5,11 @@ import shlex
 import sys
 from pathlib import Path
 
+from labelmeme.build import build
 from labelmeme.fixture import make_fixture
 from labelmeme.prep import PrepSpec, prep
 from labelmeme.schema import SLUG
+from labelmeme.shaping import ShapeParams
 from labelmeme.track import track
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
@@ -48,6 +50,9 @@ def main() -> None:
     t = commands.add_parser("track", help="detect cuts and track people in work/<id>/video.mp4")
     t.add_argument("id", type=_slug)
 
+    b = commands.add_parser("build", help="shape work/<id>/ tracks per subjects.json into web/public/templates/<id>/")
+    b.add_argument("id", type=_slug)
+
     args = parser.parse_args()
     match args.command:
         case "fixture":
@@ -61,6 +66,8 @@ def main() -> None:
             print(prep(spec, WORK_DIR / spec.id, command))
         case "track":
             track(WORK_DIR / args.id, MODELS_DIR)
+        case "build":
+            build(WORK_DIR / args.id, TEMPLATES_DIR, ShapeParams())
 
 
 if __name__ == "__main__":

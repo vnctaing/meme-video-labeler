@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "fixture",
+      "title": "Fixture: test pattern",
+      "credit": "Synthetic ffmpeg testsrc2 pattern, no rights reserved",
+      "width": 640,
+      "height": 360,
+      "fps": 24,
+      "frameCount": 48,
+      "subjectCount": 2
+    }
+  ]
+}

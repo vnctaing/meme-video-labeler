@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -59,6 +60,15 @@ def read_cuts(work: Path, frame_count: int) -> list[int]:
             raise ValueError(f"{path}: cuts[{i}].frame must be an integer in (0, {frame_count}), sorted and unique, got {f!r}")
         cuts.append(f)
     return cuts
+
+
+def tracks_id(cuts: list[int], tracks_json: bytes) -> str:
+    return hashlib.sha256(json.dumps(cuts).encode() + b"\n" + tracks_json).hexdigest()[:16]
+
+
+def write_subjects_stub(path: Path, track_ids: list[str], current_id: str) -> None:
+    stub = {"tracksId": current_id, "subjects": [{"id": "", "name": "", "tracks": [t]} for t in track_ids]}
+    path.write_text(json.dumps(stub, indent=2) + "\n", encoding="utf-8")
 
 
 def _device() -> str:
@@ -144,7 +154,9 @@ def track(work: Path, models_dir: Path) -> Tracks:
     tracks, decoded = run_tracker(video, cuts, models_dir / MODEL)
     if decoded != facts.frameCount:
         raise ValueError(f"{video}: tracked {decoded} frames, video.json says {facts.frameCount}")
-    (work / "tracks.json").write_text(json.dumps(tracks, separators=(",", ":")) + "\n", encoding="utf-8")
+    tracks_json = (json.dumps(tracks, separators=(",", ":")) + "\n").encode()
+    (work / "tracks.json").write_bytes(tracks_json)
+    current_id = tracks_id(cuts, tracks_json)
 
     sheets_dir = work / "sheets"
     for old in sheets_dir.glob("track_*.jpg"):
@@ -153,10 +165,9 @@ def track(work: Path, models_dir: Path) -> Tracks:
 
     subjects_path = work / "subjects.json"
     if subjects_path.exists():
-        print(f"keeping existing {subjects_path}")
+        print(f"keeping existing {subjects_path}, these tracks have tracksId {current_id!r}")
     else:
-        stub = {"subjects": [{"id": "", "name": "", "tracks": [tid]} for tid in tracks]}
-        subjects_path.write_text(json.dumps(stub, indent=2) + "\n", encoding="utf-8")
+        write_subjects_stub(subjects_path, list(tracks), current_id)
     for tid, dets in tracks.items():
         print(f"{_caption(tid, dets)} ({len(dets)} detections)")
     return tracks

@@ -11,7 +11,7 @@ from labelmeme import sheets
 from labelmeme.prep import read_facts
 from labelmeme.schema import SLUG, WireSubject, WireTemplate, write_template
 from labelmeme.shaping import Box, ShapeParams, Track, shape_subject
-from labelmeme.track import read_cuts
+from labelmeme.track import read_cuts, tracks_id
 
 SAMPLES_PER_SHOT = 4
 COLORS = [(0, 200, 255), (255, 120, 0), (80, 220, 80), (220, 80, 220), (0, 80, 255)]
@@ -24,9 +24,18 @@ class SubjectSpec:
     tracks: tuple[str, ...]
 
 
-def parse_subjects(raw: object, known_tracks: set[str]) -> list[SubjectSpec]:
+def parse_subjects(raw: object, known_tracks: set[str], expected_tracks_id: str) -> list[SubjectSpec]:
     if not isinstance(raw, dict) or not isinstance(raw.get("subjects"), list):
         raise ValueError('subjects.json: expected {"subjects": [...]}')
+    if "tracksId" not in raw:
+        raise ValueError(
+            f'subjects.json: no "tracksId" field. Check every track id against sheets/overview.jpg, then add "tracksId": "{expected_tracks_id}"'
+        )
+    if raw["tracksId"] != expected_tracks_id:
+        raise ValueError(
+            f'subjects.json: written for tracksId "{raw["tracksId"]}", but cuts.json and tracks.json now give "{expected_tracks_id}". '
+            f'Track ids may now name different people. Check every track id against sheets/overview.jpg, then set "tracksId": "{expected_tracks_id}"'
+        )
     specs: list[SubjectSpec] = []
     claimed: dict[str, str] = {}
     for i, s in enumerate(raw["subjects"]):
@@ -50,8 +59,8 @@ def parse_subjects(raw: object, known_tracks: set[str]) -> list[SubjectSpec]:
     return specs
 
 
-def load_tracks(path: Path) -> dict[str, Track]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def load_tracks(tracks_json: bytes) -> dict[str, Track]:
+    raw = json.loads(tracks_json)
     return {tid: {d["frame"]: _box(d["box"]) for d in dets} for tid, dets in raw.items()}
 
 
@@ -98,8 +107,9 @@ def write_built_sheet(video: Path, template: WireTemplate, out: Path) -> None:
 def build(work: Path, templates_dir: Path, params: ShapeParams) -> WireTemplate:
     facts = read_facts(work)
     cuts = read_cuts(work, facts.frameCount)
-    tracks = load_tracks(work / "tracks.json")
-    specs = parse_subjects(json.loads((work / "subjects.json").read_text(encoding="utf-8")), set(tracks))
+    tracks_json = (work / "tracks.json").read_bytes()
+    tracks = load_tracks(tracks_json)
+    specs = parse_subjects(json.loads((work / "subjects.json").read_text(encoding="utf-8")), set(tracks), tracks_id(cuts, tracks_json))
 
     subjects: list[WireSubject] = []
     for spec in specs:

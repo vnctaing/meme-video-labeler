@@ -1,0 +1,15 @@
+{
+  "scene_threshold": 0.3,
+  "cuts": [
+    {
+      "frame": 130,
+      "seconds": 5.417,
+      "score": 0.459
+    },
+    {
+      "frame": 194,
+      "seconds": 8.083,
+      "score": 0.551
+    }
+  ]
+}

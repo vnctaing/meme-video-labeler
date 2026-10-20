@@ -1,0 +1,31 @@
+{
+  "tracksId": "a73fc1abeaffa34a",
+  "subjects": [
+    {
+      "id": "thom",
+      "name": "Thom",
+      "tracks": [
+        "s1-1",
+        "s3-1"
+      ]
+    },
+    {
+      "id": "barley",
+      "name": "Barley",
+      "tracks": [
+        "s1-2",
+        "s1-6",
+        "s3-2"
+      ]
+    },
+    {
+      "id": "celia",
+      "name": "Celia",
+      "tracks": [
+        "s1-3",
+        "s1-4",
+        "s3-3"
+      ]
+    }
+  ]
+}

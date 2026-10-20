@@ -9,5 +9,5 @@
 Produced from `pipeline/` with:
 
 ```sh
-uv run python -m labelmeme prep /private/tmp/claude-501/-Users-vnctaing-projects/fa08a773-7b51-4d6c-940a-5f603e8dad4f/scratchpad/design-A-dl/tos720.mov --start 225.1 --duration 19.4 --id tos-lab --title 'Tears of Steel: the lab' --credit 'Tears of Steel (c) Blender Foundation, CC-BY 3.0, mango.blender.org' --source-url https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov --license 'CC-BY 3.0'
+uv run python -m labelmeme prep tears_of_steel_720p.mov --start 225.1 --duration 19.4 --id tos-lab --title 'Tears of Steel: the lab' --credit 'Tears of Steel (c) Blender Foundation, CC-BY 3.0, mango.blender.org' --source-url https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov --license 'CC-BY 3.0'
 ```

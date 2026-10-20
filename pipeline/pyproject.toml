@@ -7,6 +7,7 @@ dependencies = [
   "timm==1.0.30",
   "torch==2.14.1",
   "torchvision==0.29.1",
+  "certifi==2026.10.18",
   "numpy==2.5.4",
   "opencv-python==5.0.0.93",
   "fastapi==0.150.0",

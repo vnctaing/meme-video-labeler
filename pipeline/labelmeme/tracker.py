@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import ssl
 import subprocess
 import urllib.request
 from bisect import bisect_right
@@ -10,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import certifi
 import numpy as np
 
 from labelmeme.plan import Box4, Segment, Tracked
@@ -52,7 +55,9 @@ def ensure_weights(models_dir: Path, url: str = WEIGHTS_URL, sha256: str = WEIGH
         return path
     models_dir.mkdir(parents=True, exist_ok=True)
     part = path.with_suffix(".pt.part")
-    urllib.request.urlretrieve(url, part)
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(url, context=context) as res, open(part, "wb") as f:
+        shutil.copyfileobj(res, f)
     got = _sha256(part)
     if got != sha256:
         part.unlink()

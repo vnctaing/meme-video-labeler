@@ -8,12 +8,14 @@ import {
   type SourceFacts,
   chooseClip,
   createJob,
+  getAuthoring,
   getJob,
   listJobs,
   retry,
   sourceUrl,
 } from "./authoring.ts";
 import { type View, el } from "./dom.ts";
+import { mountSubjectEditor } from "./subject-editor.ts";
 import type { TemplateId } from "./template.ts";
 
 const MAX_CLIP_SECONDS = 30;
@@ -86,10 +88,12 @@ export async function jobView(id: TemplateId): Promise<View> {
   let timer = 0;
   let teardownPanel: () => void = () => {};
   const title = el("h1", {}, id);
+  const header = el("header", {}, el("a", { className: "back", href: "#/new" }, "← New template"), title);
   const panel = el("main", { className: "author" });
 
   const show = (next: Job) => {
     job = next;
+    header.hidden = next.state.kind === "editing" || next.state.kind === "ready";
     teardownPanel();
     const built = stepPanel(next, show);
     teardownPanel = built.teardown;
@@ -124,7 +128,7 @@ export async function jobView(id: TemplateId): Promise<View> {
     schedule();
   } else show(job);
   return {
-    nodes: [el("header", {}, el("a", { className: "back", href: "#/new" }, "← New template"), title), panel],
+    nodes: [header, panel],
     teardown: () => {
       alive = false;
       clearTimeout(timer);
@@ -154,7 +158,7 @@ function stepPanel(job: Job, show: (job: Job) => void): Panel {
       return still(clipPanel(job.id, state.source, null, show));
     case "editing":
     case "ready":
-      return still(el("section", {}, el("h2", {}, "3. Subjects"), changeClipLink(job.id, state.source, state.clip, show)));
+      return editorPanel(job.id, state.source, state.clip, show);
     case "failed":
       return still(failedPanel(job, state, show));
     default: {
@@ -350,6 +354,27 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
     current === null ? "" : el("p", { className: "hint" }, "A new clip discards every subject and keyframe."),
     form,
   );
+}
+
+function editorPanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): Panel {
+  const node = el("section", { className: "subject-editor" }, el("p", { role: "status" }, "Loading the editor…"));
+  let alive = true;
+  let destroy = () => {};
+  getAuthoring(id)
+    .then((view) => {
+      if (!alive) return;
+      node.replaceChildren();
+      destroy = mountSubjectEditor(node, id, view).destroy;
+      node.append(changeClipLink(id, source, clip, show));
+    })
+    .catch((e: unknown) => node.replaceChildren(el("p", { className: "field-error" }, message(e))));
+  return {
+    node,
+    teardown: () => {
+      alive = false;
+      destroy();
+    },
+  };
 }
 
 function changeClipLink(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): HTMLElement {

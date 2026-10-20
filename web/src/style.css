@@ -113,7 +113,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--panel);
   color: var(--text);
 }
-.author button[type="submit"], .author button.build { background: var(--accent); color: #111; border: 0; font-weight: 600; }
+.author button[type="submit"] { background: var(--accent); color: #111; border: 0; font-weight: 600; }
 .author button:disabled { opacity: 0.5; }
 .author-form, .clip-form { display: grid; gap: 14px; }
 .field-error, .failure { color: #ff7b72; margin: 0; min-height: 1em; font-size: 0.9rem; }
@@ -131,28 +131,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .clip-form input[type="range"] { accent-color: var(--accent); }
 .clip-length { font-variant-numeric: tabular-nums; margin: 0; }
 
-.person, .ignored {
-  border: 2px solid var(--person, var(--line));
-  border-radius: 12px;
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-}
-.ignored { border-style: dashed; opacity: 0.85; }
-.ignored h3 { margin: 0; font-size: 1rem; color: var(--muted); }
-.person-head { display: flex; gap: 10px; align-items: center; }
-.person-head input { font: inherit; font-size: 1.1rem; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); flex: 1; }
-.swatch { width: 18px; height: 18px; border-radius: 50%; background: var(--person); flex: none; }
-.timeline { position: relative; height: 14px; background: var(--bg); border-radius: 4px; overflow: hidden; }
-.timeline .span { position: absolute; top: 2px; bottom: 2px; border-radius: 3px; opacity: 0.85; }
-.timeline .span.overlap { background-image: repeating-linear-gradient(45deg, transparent 0 4px, rgb(0 0 0 / 0.45) 4px 8px) !important; }
-.timeline .cut { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); z-index: 1; }
-.cards { display: grid; gap: 10px; }
-.track-card { margin: 0; border: 3px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
-.track-card img { display: block; width: 100%; height: auto; }
-.track-card figcaption { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; padding: 8px; font-size: 0.85rem; color: var(--muted); }
-.issue { margin: 0; font-size: 0.9rem; color: var(--muted); }
-.issue.blocking { color: #ff7b72; }
-.build-row { display: grid; gap: 10px; justify-items: start; }
 .change-clip summary { cursor: pointer; color: var(--accent); }
 .author .field input { text-transform: none; }
+
+#app:has(.subject-editor) { max-width: 1240px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.subject-editor { display: flex; flex-direction: column; gap: 10px; }
+.editor-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 0 0 12px; border-bottom: 1px solid var(--line); }
+.back-icon { display: flex; width: 44px; height: 44px; align-items: center; justify-content: center; }
+.back-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.title-input { flex: 1 1 240px; min-width: 0; background: transparent; border: none; color: var(--text); font: 600 18px system-ui, sans-serif; padding: 0; outline: none; }
+.author button.save { height: 40px; padding: 0 18px; border-radius: 8px; border: none; background: var(--accent); color: #17181c; font-weight: 600; }
+.stage { position: relative; }
+.editor-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.editor-canvas { display: block; width: 100%; height: auto; border-radius: 10px; background: #000; cursor: crosshair; }
+.transport { display: flex; align-items: center; gap: 12px; }
+.author button.play { width: 44px; height: 44px; padding: 0; border-radius: 8px; border: none; background: var(--text); color: #17181c; display: flex; align-items: center; justify-content: center; }
+.play svg { width: 18px; height: 18px; fill: currentColor; }
+.timecode { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: 13px; font-variant-numeric: tabular-nums; }
+.timecode .muted, .editor-hint { color: var(--muted); }
+.editor-hint { flex: 1; text-align: right; font-size: 13px; }
+.editor-status { margin: 0; min-height: 1em; font-size: 0.9rem; color: #ff7b72; }
+.timeline { position: relative; display: grid; grid-template-columns: 140px 1fr; column-gap: 12px; row-gap: 6px; padding-top: 8px; }
+.lanes, .lane { display: contents; }
+.lane-name { box-sizing: border-box; height: 36px; width: 140px; background: #1d1f24; border: 1px solid var(--line); border-left: 4px solid var(--subject); border-radius: 6px; color: var(--text); font: 500 14px system-ui, sans-serif; padding: 0 10px; }
+.lane.selected .lane-name { border: 1.5px solid var(--subject); }
+.lane-track { position: relative; height: 36px; border-radius: 6px; background: #1a1b20; cursor: pointer; touch-action: none; }
+.lane-track .bar { position: absolute; top: 14px; height: 8px; border-radius: 4px; background: var(--subject); }
+.lane-track .seg { position: absolute; top: 12px; height: 12px; border-radius: 4px; overflow: hidden; background: repeating-linear-gradient(45deg, rgb(255 255 255 / 0.12) 0 4px, transparent 4px 8px); outline: 1px solid var(--subject); }
+.lane-track .seg[data-status="failed"] { outline-color: #ff7b72; background: rgb(255 123 114 / 0.35); }
+.lane-track .seg-fill { height: 100%; width: 0; background: var(--subject); transition: width 0.3s; }
+.author .lane-track button.key { position: absolute; top: 11px; width: 14px; height: 14px; margin-left: -7px; padding: 0; transform: rotate(45deg); background: #fff; border: 2px solid #0f1013; border-radius: 0; z-index: 2; }
+.author .lane-track button.key.hollow { background: #0f1013; border-color: #fff; }
+.author button.add-subject { width: 140px; height: 36px; border-radius: 6px; border: 1.5px dashed #4a4d57; background: transparent; color: var(--text); font-size: 13px; }
+.add-row { display: block; grid-column: 1; }
+.lane-name { grid-column: 1; }
+.lane-track { grid-column: 2; }
+.timeline-overlay { position: absolute; top: 0; bottom: 42px; left: 152px; right: 0; pointer-events: none; }
+.timeline-overlay .cut { position: absolute; top: 0; bottom: 0; width: 1px; background: #4a4d57; z-index: 1; }
+.timeline-overlay .playhead { position: absolute; top: -8px; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); z-index: 3; }

@@ -107,7 +107,10 @@ class Worker:
                 continue
             if is_editable(job.state):
                 self._progress.pop(job_id, None)
-                self._track_next(job)
+                try:
+                    self._track_next(job)
+                except Exception:
+                    log.exception("cannot plan tracking for job %s", job_id)
                 continue
             try:
                 self._report(job_id, 0, None)
@@ -134,24 +137,24 @@ class Worker:
         if not todo:
             return
         subject, seg = todo[0]
-        _, facts = self._store.read(job.id)
-        clip = Clip(self._paths.work_dir / job.id / "video.mp4", facts.width, facts.height)
         self._segment[job.id] = SegmentProgress(subject, seg.key, 0, None)
         log.info("tracking %s segment %s for subject %s", job.id, seg.key, subject)
         started = time.perf_counter()
         try:
+            _, facts = self._store.read(job.id)
+            clip = Clip(self._paths.work_dir / job.id / "video.mp4", facts.width, facts.height)
             tracked = self._tracker.track(
                 clip, seg,
                 on_frame=lambda done, total: self._segment.__setitem__(job.id, SegmentProgress(subject, seg.key, done, total)),
                 cancelled=lambda: not self._store.is_planned(job.id, seg.key),
             )
+            kept = self._store.put_segment(job.id, seg, tracked)
         except Cancelled:
             log.info("cancelled %s segment %s: an edit replaced it", job.id, seg.key)
         except Exception as e:
             log.exception("tracking %s segment %s failed", job.id, seg.key)
             self._failures.setdefault(job.id, {})[seg.key] = plain_message(e)
         else:
-            kept = self._store.put_segment(job.id, seg, tracked)
             log.info("%s %s segment %s in %.1f s", "tracked" if kept else "discarded", job.id, seg.key, time.perf_counter() - started)
         finally:
             self._segment.pop(job.id, None)

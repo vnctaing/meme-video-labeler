@@ -1,5 +1,6 @@
 import json
 import shutil
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -111,3 +112,37 @@ def test_save_refuses_while_segments_track_and_names_a_blank_name(tmp_path: Path
         assert (res.status_code, res.json()["field"]) == (422, "subjects[0].name")
         bad = client.put("/api/jobs/job/authoring", json={"title": "T", "subjects": [{**subjects[0], "keyframes": [{"frame": 99, "hidden": True}]}]}, headers=ORIGIN)
         assert (bad.status_code, bad.json()["field"]) == (422, "subjects[0].keyframes[0].frame")
+
+
+class GatedTracker(FakeTracker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def track(self, clip: Clip, seg: Segment, *, on_frame: Callable[[int, int], None], cancelled: Callable[[], bool]) -> Tracked:
+        self.entered.set()
+        assert self.release.wait(10)
+        return super().track(clip, seg, on_frame=on_frame, cancelled=cancelled)
+
+
+def test_a_store_error_fails_its_segment_and_the_worker_keeps_tracking(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    cuts = paths.work_dir / "job/cuts.json"
+    good = cuts.read_text()
+    fake = GatedTracker()
+    with TestClient(create_app(paths, 5184, fake)) as client:
+        _put(client, {"frame": 10, "point": [120, 90]})
+        assert fake.entered.wait(5)
+        cuts.write_text(json.dumps({"cuts": [{"frame": 999}]}))
+        fake.release.set()
+        time.sleep(0.3)
+        cuts.write_text(good)
+
+        failed = [s for s in client.get("/api/jobs/job/authoring").json()["tracks"]["s1"]["segments"] if s["status"] == "failed"]
+        assert [(s["key"], "cuts.json" in s["message"]) for s in failed] == [("tail|10-24|10@120,90", True)]
+
+        fake.tracked.clear()
+        _put(client, {"frame": 12, "point": [120, 90]})
+        _settled(client)
+        assert sorted(fake.tracked) == ["lead|0-12|12@120,90", "tail|12-24|12@120,90"]

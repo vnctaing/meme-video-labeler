@@ -1,10 +1,11 @@
 import hashlib
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from labelmeme.plan import PointKey, Segment
-from labelmeme.tracker import ensure_weights, fill, grid
+from labelmeme.tracker import IMG_MEAN, IMG_STD, ensure_weights, fill, grid, normalize
 
 
 def test_grid_keeps_even_frames_the_ends_and_every_click() -> None:
@@ -35,3 +36,15 @@ def test_ensure_weights_downloads_once_and_refuses_a_wrong_checksum(tmp_path: Pa
     with pytest.raises(ValueError, match="sha256"):
         ensure_weights(tmp_path / "other", upstream.as_uri(), sha)
     assert list((tmp_path / "other").iterdir()) == []
+
+
+def test_normalize_scales_each_channel_by_the_model_mean_and_std_into_half_precision_nchw() -> None:
+    frames = np.zeros((2, 2, 3, 3), np.uint8)
+    frames[1, 0, 2] = (255, 0, 51)
+
+    images = normalize(frames)
+
+    assert (str(images.dtype), tuple(images.shape)) == ("torch.float16", (2, 3, 2, 3))
+    expected = [(v / 255 - m) / s for v, m, s in zip((255, 0, 51), IMG_MEAN, IMG_STD)]
+    assert images[1, :, 0, 2].tolist() == pytest.approx(expected, rel=1e-3)
+    assert images[0, :, 1, 1].tolist() == pytest.approx([-m / s for m, s in zip(IMG_MEAN, IMG_STD)], rel=1e-3)

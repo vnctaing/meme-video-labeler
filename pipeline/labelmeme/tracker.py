@@ -104,6 +104,17 @@ def decode(video: Path, frames: list[int]) -> np.ndarray:
     return raw.reshape(len(frames), IMAGE_SIZE, IMAGE_SIZE, 3)
 
 
+def normalize(frames: np.ndarray) -> torch.Tensor:
+    import torch
+
+    mean, std = torch.tensor(IMG_MEAN)[:, None, None], torch.tensor(IMG_STD)[:, None, None]
+    n, height, width, _ = frames.shape
+    images = torch.empty((n, 3, height, width), dtype=torch.float16)
+    for i, frame in enumerate(frames):
+        images[i] = (torch.from_numpy(frame).permute(2, 0, 1).float() / 255.0 - mean) / std
+    return images
+
+
 def _bbox(mask: torch.Tensor) -> Box4 | None:
     import torch
 
@@ -150,10 +161,7 @@ class Tracker:
 
         predictor = self._load()
         frames = grid(seg)
-        rgb = torch.from_numpy(decode(clip.video, frames)).permute(0, 3, 1, 2)
-        mean, std = torch.tensor(IMG_MEAN)[:, None, None], torch.tensor(IMG_STD)[:, None, None]
-        images = ((rgb.float() / 255.0 - mean) / std).half()
-        del rgb
+        images = normalize(decode(clip.video, frames))
 
         original = svp.load_video_frames
         svp.load_video_frames = lambda **_: (images, clip.height, clip.width)

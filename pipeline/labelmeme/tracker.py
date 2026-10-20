@@ -62,13 +62,11 @@ def ensure_weights(models_dir: Path, url: str = WEIGHTS_URL, sha256: str = WEIGH
 
 
 def grid(seg: Segment) -> list[int]:
-    """Frames the tracker sees. Even frames on an absolute grid, so neighbouring segments agree, plus ends and clicks."""
     lo, hi = seg.start, max(seg.stop - 1, seg.clicks[-1].frame)
     return sorted({lo, hi, *(c.frame for c in seg.clicks), *range(lo + lo % STRIDE, hi + 1, STRIDE)})
 
 
 def fill(boxes: dict[int, Box4 | None], first: int, last: int) -> list[Box4 | None]:
-    """Linear interpolation between tracked frames; no box where either neighbour lost the subject."""
     known = sorted(boxes)
     out: list[Box4 | None] = []
     for n in range(first, last + 1):
@@ -112,8 +110,6 @@ def _bbox(mask: torch.Tensor) -> Box4 | None:
 
 
 class Tracker:
-    """EdgeTAM on MPS (CPU when absent), tracking every STRIDE-th frame with memory attention in fp16."""
-
     def __init__(self, models_dir: Path) -> None:
         self._models_dir = models_dir
         self._predictor = None

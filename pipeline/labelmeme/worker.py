@@ -5,15 +5,19 @@ import queue
 import shlex
 import shutil
 import threading
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from labelmeme import youtube
 from labelmeme.authoring import AuthoringStore
 from labelmeme.cuts import write_cuts
-from labelmeme.job import Downloading, Job, Jobs, Preparing, StepDone, StepFailed
+from labelmeme.job import Downloading, Job, Jobs, Preparing, StepDone, StepFailed, is_editable
+from labelmeme.plan import Segment, Tracked
 from labelmeme.prep import PrepSpec, prep
+from labelmeme.tracker import Cancelled, Clip, Tracker
 
 log = logging.getLogger("labelmeme.worker")
 
@@ -24,6 +28,18 @@ class Progress:
     done: int
     total: int | None
     resumed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentProgress:
+    subject: str
+    key: str
+    done: int
+    total: int | None
+
+
+class SegmentTracker(Protocol):
+    def track(self, clip: Clip, seg: Segment, *, on_frame: Callable[[int, int], None], cancelled: Callable[[], bool]) -> Tracked: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,9 +57,12 @@ CLIP_OUTPUTS = ("video.mp4", "thumb.jpg", "video.json", "SOURCE.md", "cuts.json"
 
 
 class Worker:
-    def __init__(self, paths: Paths, store: AuthoringStore) -> None:
+    def __init__(self, paths: Paths, store: AuthoringStore, tracker: SegmentTracker | None = None) -> None:
         self._paths = paths
         self._store = store
+        self._tracker = tracker or Tracker(paths.models_dir)
+        self._segment: dict[str, SegmentProgress] = {}
+        self._failures: dict[str, dict[str, str]] = {}
         self._queue: queue.Queue[str] = queue.Queue()
         self._pending: set[str] = set()
         self._pending_lock = threading.Lock()
@@ -63,6 +82,15 @@ class Worker:
     def progress(self, job_id: str) -> Progress | None:
         return self._progress.get(job_id)
 
+    def segment_progress(self, job_id: str) -> SegmentProgress | None:
+        return self._segment.get(job_id)
+
+    def failures(self, job_id: str) -> Mapping[str, str]:
+        return dict(self._failures.get(job_id, {}))
+
+    def clear_failures(self, job_id: str) -> None:
+        self._failures.pop(job_id, None)
+
     def _report(self, job_id: str, done: int, total: int | None) -> None:
         current = self._progress.get(job_id)
         self._progress[job_id] = Progress("running", done, total, current is not None and current.resumed)
@@ -74,6 +102,14 @@ class Worker:
                 self._pending.discard(job_id)
             try:
                 job = jobs.get(job_id)
+            except Exception:
+                log.exception("cannot read job %s", job_id)
+                continue
+            if is_editable(job.state):
+                self._progress.pop(job_id, None)
+                self._track_next(job)
+                continue
+            try:
                 self._report(job_id, 0, None)
                 match job.state:
                     case Downloading() as state:
@@ -91,6 +127,35 @@ class Worker:
                     log.exception("could not record the failure of job %s", job_id)
             finally:
                 self._progress.pop(job_id, None)
+
+    def _track_next(self, job: Job) -> None:
+        failed = self._failures.get(job.id, {})
+        todo = [(sid, seg) for sid, seg in self._store.missing(job.id) if seg.key not in failed]
+        if not todo:
+            return
+        subject, seg = todo[0]
+        _, facts = self._store.read(job.id)
+        clip = Clip(self._paths.work_dir / job.id / "video.mp4", facts.width, facts.height)
+        self._segment[job.id] = SegmentProgress(subject, seg.key, 0, None)
+        log.info("tracking %s segment %s for subject %s", job.id, seg.key, subject)
+        started = time.perf_counter()
+        try:
+            tracked = self._tracker.track(
+                clip, seg,
+                on_frame=lambda done, total: self._segment.__setitem__(job.id, SegmentProgress(subject, seg.key, done, total)),
+                cancelled=lambda: not self._store.is_planned(job.id, seg.key),
+            )
+        except Cancelled:
+            log.info("cancelled %s segment %s: an edit replaced it", job.id, seg.key)
+        except Exception as e:
+            log.exception("tracking %s segment %s failed", job.id, seg.key)
+            self._failures.setdefault(job.id, {})[seg.key] = plain_message(e)
+        else:
+            kept = self._store.put_segment(job.id, seg, tracked)
+            log.info("%s %s segment %s in %.1f s", "tracked" if kept else "discarded", job.id, seg.key, time.perf_counter() - started)
+        finally:
+            self._segment.pop(job.id, None)
+        self.enqueue(job, False)
 
     def _download(self, job: Job, state: Downloading) -> None:
         youtube.download(state.source, self._paths.sources_dir, lambda done, total: self._report(job.id, done, total))

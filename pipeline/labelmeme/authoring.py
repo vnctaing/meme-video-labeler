@@ -29,6 +29,7 @@ class Authoring:
 
 @dataclass(frozen=True, slots=True)
 class ClipFacts:
+    fps: int
     frame_count: int
     width: int
     height: int
@@ -37,7 +38,7 @@ class ClipFacts:
 
 def read_clip(work: Path) -> ClipFacts:
     facts = read_facts(work)
-    return ClipFacts(facts.frameCount, facts.width, facts.height, tuple(read_cuts(work, facts.frameCount)))
+    return ClipFacts(facts.fps, facts.frameCount, facts.width, facts.height, tuple(read_cuts(work, facts.frameCount)))
 
 
 def empty(title: str) -> Authoring:

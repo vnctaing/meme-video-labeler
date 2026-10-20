@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest==9.0.2"]
+dev = ["httpx==0.28.1", "pytest==9.0.2"]
 
 [tool.uv.extra-build-dependencies]
 edgetam = [{ requirement = "torch", match-runtime = true }]

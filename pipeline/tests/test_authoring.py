@@ -6,7 +6,7 @@ import pytest
 from labelmeme.authoring import AuthoringStore, ClipFacts, parse_subjects
 from labelmeme.plan import HiddenKey, PointKey, Subject, Tracked
 
-CLIP = ClipFacts(frame_count=300, width=640, height=360, cuts=(100, 200))
+CLIP = ClipFacts(fps=24, frame_count=300, width=640, height=360, cuts=(100, 200))
 
 
 def _store(tmp_path: Path) -> AuthoringStore:

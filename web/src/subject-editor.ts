@@ -240,6 +240,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
       track.replaceChildren(...bars, ...segs, ...keys);
       if (lanes.children[i] !== lane) lanes.insertBefore(lane, lanes.children[i] ?? null);
     });
+    overlay.hidden = state.doc.subjects.length === 0;
     overlay.replaceChildren(
       ...view.cuts.map((c) => {
         const line = el("div", { className: "cut" });

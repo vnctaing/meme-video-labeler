@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:author": "node scripts/dev-author.mjs",
     "build": "tsc && tsc -p tsconfig.test.json && vite build",
     "preview": "vite preview",
     "test": "vitest run",

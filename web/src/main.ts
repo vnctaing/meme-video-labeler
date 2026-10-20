@@ -1,10 +1,13 @@
 import "./style.css";
+import { type View, el } from "./dom.ts";
 import type { ExportSupport } from "./export.ts";
 import { loadLabelFont } from "./labels.ts";
 import { mountPreview } from "./preview.ts";
-import { type IndexEntry, type SubjectId, loadIndex, loadTemplate } from "./template.ts";
+import { type IndexEntry, type SubjectId, type TemplateId, loadIndex, loadTemplate } from "./template.ts";
 
-type Route = { kind: "gallery" } | { kind: "editor"; id: string };
+type Route = { kind: "gallery" } | { kind: "editor"; id: string } | { kind: "new" } | { kind: "job"; id: TemplateId };
+
+const AUTHORING = import.meta.env.VITE_AUTHOR === "1";
 
 type ExportState =
   | { kind: "idle" }
@@ -14,26 +17,32 @@ type ExportState =
 
 type SupportState = { kind: "checking" } | ({ kind: "checked" } & ExportSupport);
 
-interface View {
-  readonly nodes: readonly Node[];
-  readonly teardown: () => void;
-}
-
 const BASE_URL = new URL(import.meta.env.BASE_URL, location.href).href;
 
 function parseRoute(hash: string): Route {
   const m = /^#\/t\/([a-z0-9-]+)$/.exec(hash);
-  return m === null ? { kind: "gallery" } : { kind: "editor", id: m[1] };
+  if (m !== null) return { kind: "editor", id: m[1] };
+  if (!AUTHORING) return { kind: "gallery" };
+  if (hash === "#/new") return { kind: "new" };
+  const job = /^#\/new\/([a-z0-9-]+)$/.exec(hash);
+  return job === null ? { kind: "gallery" } : { kind: "job", id: job[1] as TemplateId };
 }
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> = {},
-  ...children: (Node | string)[]
-): HTMLElementTagNameMap[K] {
-  const node = Object.assign(document.createElement(tag), props);
-  node.append(...children);
-  return node;
+async function routeView(route: Route): Promise<View> {
+  switch (route.kind) {
+    case "gallery":
+      return galleryView();
+    case "editor":
+      return editorView(route.id);
+    case "new":
+      return AUTHORING ? (await import("./author.ts")).newView() : galleryView();
+    case "job":
+      return AUTHORING ? (await import("./author.ts")).jobView(route.id) : galleryView();
+    default: {
+      const _exhaustive: never = route;
+      return _exhaustive;
+    }
+  }
 }
 
 function formatDuration(frameCount: number, fps: number): string {
@@ -60,7 +69,12 @@ async function galleryView(): Promise<View> {
   return {
     nodes: [
       el("header", {}, el("h1", {}, "labelmeme"), el("p", { className: "tagline" }, "Pick a clip, name the people, download the meme.")),
-      el("main", { className: "gallery" }, ...templates.map(galleryCard)),
+      el(
+        "main",
+        { className: "gallery" },
+        ...(AUTHORING ? [el("a", { className: "card new-card", href: "#/new" }, el("h2", {}, "+ New template"), el("p", { className: "meta" }, "From a YouTube link"))] : []),
+        ...templates.map(galleryCard),
+      ),
     ],
     teardown: () => {},
   };
@@ -188,7 +202,7 @@ async function start(root: HTMLElement) {
     teardown();
     teardown = () => {};
     const route = parseRoute(location.hash);
-    const view = await (route.kind === "gallery" ? galleryView() : editorView(route.id)).catch(errorView);
+    const view = await routeView(route).catch(errorView);
     if (token !== latest) {
       view.teardown();
       return;

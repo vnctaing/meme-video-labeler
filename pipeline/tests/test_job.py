@@ -182,6 +182,21 @@ def test_recover_enqueues_running_jobs_oldest_first(tmp_path: Path) -> None:
     assert {j.id for j in restarted.list()} == {"a", "b", "c"}
 
 
+def test_build_requested_enqueues_and_recover_resumes_a_build(tmp_path: Path) -> None:
+    jobs, enqueued = _store(tmp_path)
+    jobs.create("a", SOURCE)
+    jobs.transition("a", StepDone())
+    jobs.transition("a", ClipChosen(CLIP))
+    jobs.transition("a", StepDone())
+    enqueued.clear()
+    jobs.transition("a", BuildRequested())
+    assert enqueued == [("a", False)]
+
+    restarted, enqueued = _store(tmp_path)
+    assert [j.state for j in restarted.recover()] == [Building(SOURCE, CLIP)]
+    assert enqueued == [("a", True)]
+
+
 @pytest.mark.parametrize("broken", ['{"version": 2}', "{", "\xff"])
 def test_a_broken_job_json_is_skipped_by_list_and_recover(tmp_path: Path, broken: str, caplog: pytest.LogCaptureFixture) -> None:
     jobs, _ = _store(tmp_path)

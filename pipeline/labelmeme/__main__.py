@@ -10,7 +10,6 @@ from labelmeme.fixture import make_fixture
 from labelmeme.prep import PrepSpec, prep
 from labelmeme.schema import SLUG
 from labelmeme.shaping import ShapeParams
-from labelmeme.track import track
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 WORK_DIR = PIPELINE_DIR / "work"
@@ -47,14 +46,12 @@ def main() -> None:
     p.add_argument("--license", required=True, help="license of the source, for SOURCE.md")
     p.add_argument("--fps", type=int, default=24)
 
-    t = commands.add_parser("track", help="detect cuts and track people in work/<id>/video.mp4")
-    t.add_argument("id", type=_slug)
-
-    b = commands.add_parser("build", help="shape work/<id>/ tracks per subjects.json into web/public/templates/<id>/")
+    b = commands.add_parser("build", help="shape work/<id>/authoring.json into web/public/templates/<id>/")
     b.add_argument("id", type=_slug)
 
     s = commands.add_parser("serve", help="run the authoring API that `npm run dev:author` starts")
     s.add_argument("--port", type=int, default=8787)
+    s.add_argument("--web-port", type=int, default=5174, help="the Vite port whose pages may call the API")
 
     args = parser.parse_args()
     match args.command:
@@ -67,15 +64,13 @@ def main() -> None:
             )
             command = shlex.join(["uv", "run", "python", "-m", "labelmeme", *sys.argv[1:]])
             print(prep(spec, WORK_DIR / spec.id, command))
-        case "track":
-            track(WORK_DIR / args.id, MODELS_DIR)
         case "build":
             build(WORK_DIR / args.id, TEMPLATES_DIR, ShapeParams())
         case "serve":
             from labelmeme.server import serve
             from labelmeme.worker import Paths
 
-            serve(Paths(WORK_DIR, MODELS_DIR, TEMPLATES_DIR), args.port)
+            serve(Paths(WORK_DIR, MODELS_DIR, TEMPLATES_DIR), args.port, args.web_port)
 
 
 if __name__ == "__main__":

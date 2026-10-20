@@ -1,24 +1,23 @@
-"""One worker, because YOLO11m at imgsz 1280 fills the GPU and a second concurrent track only slows both.
-A thread, because torch, cv2, ffmpeg and yt-dlp release the GIL, so the HTTP loop stays responsive.
-"""
 from __future__ import annotations
 
-import json
 import logging
 import queue
 import shlex
 import shutil
 import threading
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
-from labelmeme import people, youtube
-from labelmeme.build import build
-from labelmeme.job import Building, Downloading, Job, Jobs, StepDone, StepFailed, Tracking, write_atomic
+from labelmeme import youtube
+from labelmeme.authoring import AuthoringStore
+from labelmeme.cuts import write_cuts
+from labelmeme.job import Downloading, Job, Jobs, Preparing, StepDone, StepFailed, is_editable
+from labelmeme.plan import Segment, Tracked
 from labelmeme.prep import PrepSpec, prep
-from labelmeme.shaping import ShapeParams
-from labelmeme.track import read_cuts, track, tracks_id
+from labelmeme.tracker import Cancelled, Clip, Tracker
 
 log = logging.getLogger("labelmeme.worker")
 
@@ -32,6 +31,18 @@ class Progress:
 
 
 @dataclass(frozen=True, slots=True)
+class SegmentProgress:
+    subject: str
+    key: str
+    done: int
+    total: int | None
+
+
+class SegmentTracker(Protocol):
+    def track(self, clip: Clip, seg: Segment, *, on_frame: Callable[[int, int], None], cancelled: Callable[[], bool]) -> Tracked: ...
+
+
+@dataclass(frozen=True, slots=True)
 class Paths:
     work_dir: Path
     models_dir: Path
@@ -42,12 +53,16 @@ class Paths:
         return self.work_dir / ".sources"
 
 
-CLIP_OUTPUTS = ("video.mp4", "thumb.jpg", "video.json", "SOURCE.md", "cuts.json", "tracks.json", "subjects.json", "sheets")
+CLIP_OUTPUTS = ("video.mp4", "thumb.jpg", "video.json", "SOURCE.md", "cuts.json", "authoring.json", "sheets")
 
 
 class Worker:
-    def __init__(self, paths: Paths) -> None:
+    def __init__(self, paths: Paths, store: AuthoringStore, tracker: SegmentTracker | None = None) -> None:
         self._paths = paths
+        self._store = store
+        self._tracker = tracker or Tracker(paths.models_dir)
+        self._segment: dict[str, SegmentProgress] = {}
+        self._failures: dict[str, dict[str, str]] = {}
         self._queue: queue.Queue[str] = queue.Queue()
         self._pending: set[str] = set()
         self._pending_lock = threading.Lock()
@@ -67,6 +82,15 @@ class Worker:
     def progress(self, job_id: str) -> Progress | None:
         return self._progress.get(job_id)
 
+    def segment_progress(self, job_id: str) -> SegmentProgress | None:
+        return self._segment.get(job_id)
+
+    def failures(self, job_id: str) -> Mapping[str, str]:
+        return dict(self._failures.get(job_id, {}))
+
+    def clear_failures(self, job_id: str) -> None:
+        self._failures.pop(job_id, None)
+
     def _report(self, job_id: str, done: int, total: int | None) -> None:
         current = self._progress.get(job_id)
         self._progress[job_id] = Progress("running", done, total, current is not None and current.resumed)
@@ -78,14 +102,23 @@ class Worker:
                 self._pending.discard(job_id)
             try:
                 job = jobs.get(job_id)
+            except Exception:
+                log.exception("cannot read job %s", job_id)
+                continue
+            if is_editable(job.state):
+                self._progress.pop(job_id, None)
+                try:
+                    self._track_next(job)
+                except Exception:
+                    log.exception("cannot plan tracking for job %s", job_id)
+                continue
+            try:
                 self._report(job_id, 0, None)
                 match job.state:
                     case Downloading() as state:
                         self._download(job, state)
-                    case Tracking() as state:
-                        self._track(job, state)
-                    case Building():
-                        build(self._paths.work_dir / job.id, self._paths.templates_dir, ShapeParams())
+                    case Preparing() as state:
+                        self._prepare(job, state)
                     case _:
                         continue
                 jobs.transition(job_id, StepDone())
@@ -98,10 +131,39 @@ class Worker:
             finally:
                 self._progress.pop(job_id, None)
 
+    def _track_next(self, job: Job) -> None:
+        failed = self._failures.get(job.id, {})
+        todo = [(sid, seg) for sid, seg in self._store.missing(job.id) if seg.key not in failed]
+        if not todo:
+            return
+        subject, seg = todo[0]
+        self._segment[job.id] = SegmentProgress(subject, seg.key, 0, None)
+        log.info("tracking %s segment %s for subject %s", job.id, seg.key, subject)
+        started = time.perf_counter()
+        try:
+            _, facts = self._store.read(job.id)
+            clip = Clip(self._paths.work_dir / job.id / "video.mp4", facts.width, facts.height)
+            tracked = self._tracker.track(
+                clip, seg,
+                on_frame=lambda done, total: self._segment.__setitem__(job.id, SegmentProgress(subject, seg.key, done, total)),
+                cancelled=lambda: not self._store.is_planned(job.id, seg.key),
+            )
+            kept = self._store.put_segment(job.id, seg, tracked)
+        except Cancelled:
+            log.info("cancelled %s segment %s: an edit replaced it", job.id, seg.key)
+        except Exception as e:
+            log.exception("tracking %s segment %s failed", job.id, seg.key)
+            self._failures.setdefault(job.id, {})[seg.key] = plain_message(e)
+        else:
+            log.info("%s %s segment %s in %.1f s", "tracked" if kept else "discarded", job.id, seg.key, time.perf_counter() - started)
+        finally:
+            self._segment.pop(job.id, None)
+        self.enqueue(job, False)
+
     def _download(self, job: Job, state: Downloading) -> None:
         youtube.download(state.source, self._paths.sources_dir, lambda done, total: self._report(job.id, done, total))
 
-    def _track(self, job: Job, state: Tracking) -> None:
+    def _prepare(self, job: Job, state: Preparing) -> None:
         work = self._paths.work_dir / job.id
         for name in CLIP_OUTPUTS:
             path = work / name
@@ -116,10 +178,8 @@ class Worker:
             credit=clip.credit, source_url=state.source.url, license=clip.license, fps=24,
         )
         facts = prep(spec, work, _prep_command(spec, source.relative_to(self._paths.work_dir.parent)))
-        tracks = track(work, self._paths.models_dir, lambda n: self._report(job.id, n, facts.frameCount))
-        current = tracks_id(read_cuts(work, facts.frameCount), (work / "tracks.json").read_bytes())
-        draft = people.to_subjects_json(people.suggest(tracks, current))
-        write_atomic(work / "subjects.json", json.dumps(draft, indent=2) + "\n")
+        write_cuts(work, facts.fps)
+        self._store.reset(job.id, clip.title)
 
 
 def _prep_command(spec: PrepSpec, source: Path) -> str:

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from labelmeme.track import read_cuts
+from labelmeme.cuts import read_cuts
 
 
 def _write_cuts(work: Path, frames: list[object]) -> None:

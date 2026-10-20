@@ -4,24 +4,22 @@ from pathlib import Path
 import pytest
 
 from labelmeme.job import (
-    BuildRequested,
-    Building,
     Clip,
     ClipChosen,
     Conflict,
     Downloaded,
     Downloading,
+    Editing,
     Failed,
     Job,
     Jobs,
+    Preparing,
     Ready,
-    Reopen,
     Retry,
+    Saved,
     SourceFacts,
     StepDone,
     StepFailed,
-    Tracked,
-    Tracking,
     advance,
     derive_id,
     dump_job,
@@ -39,40 +37,32 @@ CLIP2 = Clip(start=10.0, end=20.0, title="Other", credit="Blender", license="unk
 STATES = {
     "downloading": Downloading(SOURCE),
     "downloaded": Downloaded(SOURCE),
-    "tracking": Tracking(SOURCE, CLIP),
-    "tracked": Tracked(SOURCE, CLIP),
-    "building": Building(SOURCE, CLIP),
+    "preparing": Preparing(SOURCE, CLIP),
+    "editing": Editing(SOURCE, CLIP),
     "ready": Ready(SOURCE, CLIP),
     "failed-download": Failed("download", "boom", Downloading(SOURCE)),
-    "failed-track": Failed("track", "boom", Tracking(SOURCE, CLIP)),
-    "failed-build": Failed("build", "boom", Building(SOURCE, CLIP)),
+    "failed-prepare": Failed("prepare", "boom", Preparing(SOURCE, CLIP)),
 }
 EVENTS = {
     "done": StepDone(),
     "fail": StepFailed("boom"),
     "clip": ClipChosen(CLIP2),
-    "build": BuildRequested(),
-    "reopen": Reopen(),
+    "save": Saved(),
     "retry": Retry(),
 }
 LEGAL = {
     ("downloading", "done"): Downloaded(SOURCE),
     ("downloading", "fail"): Failed("download", "boom", Downloading(SOURCE)),
-    ("downloaded", "clip"): Tracking(SOURCE, CLIP2),
-    ("tracking", "done"): Tracked(SOURCE, CLIP),
-    ("tracking", "fail"): Failed("track", "boom", Tracking(SOURCE, CLIP)),
-    ("tracked", "clip"): Tracking(SOURCE, CLIP2),
-    ("tracked", "build"): Building(SOURCE, CLIP),
-    ("building", "done"): Ready(SOURCE, CLIP),
-    ("building", "fail"): Failed("build", "boom", Building(SOURCE, CLIP)),
-    ("ready", "clip"): Tracking(SOURCE, CLIP2),
-    ("ready", "reopen"): Tracked(SOURCE, CLIP),
+    ("downloaded", "clip"): Preparing(SOURCE, CLIP2),
+    ("preparing", "done"): Editing(SOURCE, CLIP),
+    ("preparing", "fail"): Failed("prepare", "boom", Preparing(SOURCE, CLIP)),
+    ("editing", "clip"): Preparing(SOURCE, CLIP2),
+    ("editing", "save"): Ready(SOURCE, CLIP),
+    ("ready", "clip"): Preparing(SOURCE, CLIP2),
+    ("ready", "save"): Ready(SOURCE, CLIP),
     ("failed-download", "retry"): Downloading(SOURCE),
-    ("failed-track", "retry"): Tracking(SOURCE, CLIP),
-    ("failed-track", "clip"): Tracking(SOURCE, CLIP2),
-    ("failed-build", "retry"): Building(SOURCE, CLIP),
-    ("failed-build", "clip"): Tracking(SOURCE, CLIP2),
-    ("failed-build", "reopen"): Tracked(SOURCE, CLIP),
+    ("failed-prepare", "retry"): Preparing(SOURCE, CLIP),
+    ("failed-prepare", "clip"): Preparing(SOURCE, CLIP2),
 }
 PAIRS = [(s, e) for s in STATES for e in EVENTS]
 
@@ -95,11 +85,11 @@ def test_job_json_round_trips(state: str) -> None:
 
 
 def test_parse_job_names_the_broken_path() -> None:
-    raw = json.loads(dump_job(Job("tos-kiss", SOURCE.url, "2026-10-19T14:02:11Z", STATES["failed-track"])))
+    raw = json.loads(dump_job(Job("tos-kiss", SOURCE.url, "2026-10-19T14:02:11Z", STATES["failed-prepare"])))
     raw["state"]["resume"]["clip"]["start"] = "soon"
     with pytest.raises(ValueError, match=r"\$\.state\.resume\.clip\.start: expected a number"):
         parse_job(raw)
-    raw["state"]["resume"] = {"kind": "tracked", "source": raw["state"]["resume"]["source"]}
+    raw["state"]["resume"] = {"kind": "editing", "source": raw["state"]["resume"]["source"]}
     with pytest.raises(ValueError, match=r"\$\.state\.resume\.kind: expected one of"):
         parse_job(raw)
 
@@ -162,39 +152,36 @@ def test_transition_writes_through_and_enqueues_only_running_states(tmp_path: Pa
     assert enqueued == [("a", False)]
     jobs.transition("a", ClipChosen(CLIP))
     assert enqueued == [("a", False), ("a", False)]
-    assert jobs.get("a").state == Tracking(SOURCE, CLIP)
+    assert jobs.get("a").state == Preparing(SOURCE, CLIP)
     with pytest.raises(Conflict):
         jobs.transition("a", ClipChosen(CLIP2))
-    assert jobs.get("a").state == Tracking(SOURCE, CLIP)
+    assert jobs.get("a").state == Preparing(SOURCE, CLIP)
 
 
-def test_recover_enqueues_running_jobs_oldest_first(tmp_path: Path) -> None:
+def test_recover_enqueues_running_and_editable_jobs_oldest_first(tmp_path: Path) -> None:
     jobs, _ = _store(tmp_path)
-    for job_id in ("b", "a", "c"):
+    for job_id in ("b", "a", "c", "d"):
         jobs.create(job_id, SOURCE)
     jobs.transition("a", StepDone())
+    for event in (StepDone(), ClipChosen(CLIP), StepDone()):
+        jobs.transition("d", event)
     (tmp_path / "work/tos-lab").mkdir()
     (tmp_path / "work/.sources").mkdir()
 
     restarted, enqueued = _store(tmp_path)
-    assert [j.id for j in restarted.recover()] == ["b", "c"]
-    assert enqueued == [("b", True), ("c", True)]
-    assert {j.id for j in restarted.list()} == {"a", "b", "c"}
+    assert [j.id for j in restarted.recover()] == ["b", "c", "d"]
+    assert enqueued == [("b", True), ("c", True), ("d", True)]
+    assert {j.id for j in restarted.list()} == {"a", "b", "c", "d"}
 
 
-def test_build_requested_enqueues_and_recover_resumes_a_build(tmp_path: Path) -> None:
+def test_save_does_not_enqueue(tmp_path: Path) -> None:
     jobs, enqueued = _store(tmp_path)
     jobs.create("a", SOURCE)
-    jobs.transition("a", StepDone())
-    jobs.transition("a", ClipChosen(CLIP))
-    jobs.transition("a", StepDone())
+    for event in (StepDone(), ClipChosen(CLIP), StepDone()):
+        jobs.transition("a", event)
     enqueued.clear()
-    jobs.transition("a", BuildRequested())
-    assert enqueued == [("a", False)]
-
-    restarted, enqueued = _store(tmp_path)
-    assert [j.state for j in restarted.recover()] == [Building(SOURCE, CLIP)]
-    assert enqueued == [("a", True)]
+    assert jobs.transition("a", Saved()).state == Ready(SOURCE, CLIP)
+    assert enqueued == []
 
 
 @pytest.mark.parametrize("broken", ['{"version": 2}', "{", "\xff"])
@@ -217,7 +204,7 @@ def test_with_settled_holds_only_in_the_named_states(tmp_path: Path) -> None:
     jobs, _ = _store(tmp_path)
     jobs.create("a", SOURCE)
     with pytest.raises(Conflict):
-        with jobs.with_settled("a", ("tracked",)):
+        with jobs.with_settled("a", ("editing",)):
             pass
     jobs.transition("a", StepDone())
     with jobs.with_settled("a", ("downloaded",)) as job:

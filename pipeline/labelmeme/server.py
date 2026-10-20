@@ -2,9 +2,8 @@
 Starlette's FileResponse answers Range requests, which the Clip step's <video> needs to seek."""
 from __future__ import annotations
 
-import json
 import logging
-import re
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -14,17 +13,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
 
-from labelmeme import people, youtube
+from labelmeme import plan, youtube
+from labelmeme.authoring import AuthoringStore, parse_subjects, subject_json
+from labelmeme.build import build
 from labelmeme.job import (
-    DEFAULT_LICENSE, BuildRequested, ClipChosen, Conflict, Failed, Job, Jobs, Reopen, Retry, SourceFacts,
-    UnknownJob, derive_id, is_running, parse_clip, state_json, write_atomic,
+    DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
+    UnknownJob, derive_id, is_running, parse_clip, state_json,
 )
-from labelmeme.prep import read_facts
-from labelmeme.track import read_cuts, tracks_id
-from labelmeme.worker import Paths, Worker
+from labelmeme.shaping import ShapeParams, shape_subject
+from labelmeme.worker import Paths, SegmentTracker, Worker
 
-ALLOWED_ORIGINS = {"http://localhost:5174", "http://127.0.0.1:5174"}
-SHEET = re.compile(r"track_s\d+-\d+\.jpg|overview\.jpg|built\.jpg")
+log = logging.getLogger("labelmeme.server")
 
 Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9-]+$", max_length=40)]
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -43,14 +42,9 @@ class ChooseClip(BaseModel):
     license: Text = DEFAULT_LICENSE
 
 
-class PersonBody(BaseModel):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=60)]
-    tracks: Annotated[list[str], Field(min_length=1)]
-
-
-class SavePeople(BaseModel):
-    tracksId: str
-    people: list[PersonBody]
+class PutAuthoring(BaseModel):
+    title: Text
+    subjects: list[dict[str, object]]
 
 
 class ApiError(Exception):
@@ -65,15 +59,17 @@ def _source_of(job: Job) -> SourceFacts:
     return state.source
 
 
-def create_app(paths: Paths) -> FastAPI:
-    worker = Worker(paths)
+def create_app(paths: Paths, web_port: int, tracker: SegmentTracker | None = None) -> FastAPI:
+    allowed_origins = {f"http://localhost:{web_port}", f"http://127.0.0.1:{web_port}"}
+    store = AuthoringStore(paths.work_dir)
+    worker = Worker(paths, store, tracker)
     jobs = Jobs(paths.work_dir, paths.templates_dir, worker.enqueue)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         paths.work_dir.mkdir(parents=True, exist_ok=True)
         for job in jobs.recover():
-            logging.getLogger("labelmeme.server").info("resuming %s in state %s", job.id, job.state.kind)
+            log.info("resuming %s in state %s", job.id, job.state.kind)
         worker.start(jobs)
         yield
 
@@ -82,7 +78,7 @@ def create_app(paths: Paths) -> FastAPI:
     @app.middleware("http")
     async def same_origin_only(request: Request, call_next):
         origin = request.headers.get("origin")
-        if origin is not None and origin not in ALLOWED_ORIGINS:
+        if origin is not None and origin not in allowed_origins:
             return JSONResponse({"error": f"origin {origin} is not allowed"}, status_code=403)
         return await call_next(request)
 
@@ -113,28 +109,33 @@ def create_app(paths: Paths) -> FastAPI:
             },
         }
 
-    def people_out(job_id: str, draft: people.Draft | None = None) -> dict:
-        work = paths.work_dir / job_id
-        try:
-            facts = read_facts(work)
-            cuts = read_cuts(work, facts.frameCount)
-            tracks_json = (work / "tracks.json").read_bytes()
-            tracks = json.loads(tracks_json)
-            current = tracks_id(cuts, tracks_json)
-            if draft is None:
-                raw = json.loads((work / "subjects.json").read_text(encoding="utf-8"))
-                draft = people.parse_draft(raw, set(tracks), current)
-        except (OSError, ValueError) as e:
-            raise ApiError(409, f"cannot read the People draft: {e}") from e
+    def authoring_out(job_id: str) -> dict:
+        a, clip = store.read(job_id)
+        running = worker.segment_progress(job_id)
+        failures = worker.failures(job_id)
+
+        def segment_out(seg: plan.Segment) -> dict:
+            out: dict = {"key": seg.key, "from": seg.start, "to": seg.stop}
+            if seg.key in a.segments:
+                return out | {"status": "done"}
+            if running is not None and running.key == seg.key:
+                return out | {"status": "running", "done": running.done, "total": running.total}
+            if seg.key in failures:
+                return out | {"status": "failed", "message": failures[seg.key]}
+            return out | {"status": "queued"}
+
+        tracks = {}
+        for s in a.subjects:
+            segments = plan.plan_subject(s.keyframes, clip.cuts, clip.frame_count)
+            frames = plan.boxes_by_frame(segments, a.segments)
+            tracks[s.id] = {
+                "runs": shape_subject(frames, plan.breaks(s.keyframes, clip.cuts), clip.width, clip.height, ShapeParams()),
+                "segments": [segment_out(seg) for seg in segments],
+            }
         return {
-            "tracksId": current, "fps": facts.fps, "frameCount": facts.frameCount, "cuts": cuts,
-            "tracks": [
-                {"id": c.id, "shot": c.shot, "first": c.first, "last": c.last, "detections": c.detections,
-                 "sheetUrl": f"/api/jobs/{job_id}/sheets/track_{c.id}.jpg?v={current}"}
-                for c in people.cards(tracks)
-            ],
-            "people": [{"name": p.name, "tracks": list(p.tracks)} for p in draft.people],
-            "issues": [{"person": i.person, "blocking": i.blocking, "message": i.message} for i in people.issues(draft, tracks)],
+            "rev": a.rev, "title": a.title, "fps": clip.fps, "frameCount": clip.frame_count,
+            "width": clip.width, "height": clip.height, "cuts": list(clip.cuts),
+            "subjects": [subject_json(s) for s in a.subjects], "tracks": tracks,
         }
 
     @app.get("/api/jobs")
@@ -174,44 +175,51 @@ def create_app(paths: Paths) -> FastAPI:
             raise ApiError(422, str(e), "clip") from e
         return job_out(jobs.transition(job_id, ClipChosen(clip)))
 
-    @app.get("/api/jobs/{job_id}/people")
-    def get_people(job_id: str) -> dict:
-        with jobs.with_settled(job_id, ("tracked", "ready")):
-            return people_out(job_id)
+    @app.get("/api/jobs/{job_id}/clip.mp4")
+    def clip_video(job_id: str) -> FileResponse:
+        with jobs.with_settled(job_id, ("editing", "ready")):
+            return FileResponse(paths.work_dir / job_id / "video.mp4", media_type="video/mp4")
 
-    @app.put("/api/jobs/{job_id}/people")
-    def save_people(job_id: str, body: SavePeople) -> dict:
-        with jobs.with_settled(job_id, ("tracked",)):
-            work = paths.work_dir / job_id
-            draft = people.Draft(body.tracksId, tuple(people.Person(p.name, tuple(p.tracks)) for p in body.people))
-            raw = people.to_subjects_json(draft)
-            out = people_out(job_id)
+    @app.get("/api/jobs/{job_id}/authoring")
+    def get_authoring(job_id: str) -> dict:
+        with jobs.with_settled(job_id, ("editing", "ready")):
+            return authoring_out(job_id)
+
+    @app.put("/api/jobs/{job_id}/authoring")
+    def put_authoring(job_id: str, body: PutAuthoring) -> dict:
+        with jobs.with_settled(job_id, ("editing", "ready")) as job:
+            _, clip = store.read(job_id)
             try:
-                people.parse_draft(raw, {t["id"] for t in out["tracks"]}, out["tracksId"])
+                subjects = parse_subjects(body.subjects, clip, "subjects")
             except ValueError as e:
-                raise ApiError(409, str(e)) from e
-            write_atomic(work / "subjects.json", json.dumps(raw, indent=2, ensure_ascii=False) + "\n")
-            return people_out(job_id, draft)
+                raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
+            store.edit(job_id, subjects, body.title)
+            worker.clear_failures(job_id)
+            worker.enqueue(job, False)
+            return authoring_out(job_id)
 
-    @app.get("/api/jobs/{job_id}/sheets/{name}")
-    def sheet(job_id: str, name: str) -> FileResponse:
-        jobs.get(job_id)
-        path = paths.work_dir / job_id / "sheets" / name
-        if SHEET.fullmatch(name) is None or not path.is_file():
-            raise ApiError(404, f"no sheet named {name}")
-        return FileResponse(path, media_type="image/jpeg")
-
-    @app.post("/api/jobs/{job_id}/build")
-    def request_build(job_id: str) -> dict:
-        with jobs.with_settled(job_id, ("tracked",)):
-            blocking = [i["message"] for i in people_out(job_id)["issues"] if i["blocking"]]
-            if blocking:
-                raise ApiError(422, " ".join(blocking), "people")
-            return job_out(jobs.transition(job_id, BuildRequested()))
-
-    @app.post("/api/jobs/{job_id}/reopen")
-    def reopen(job_id: str) -> dict:
-        return job_out(jobs.transition(job_id, Reopen()))
+    @app.post("/api/jobs/{job_id}/save")
+    def save(job_id: str) -> dict:
+        with jobs.with_settled(job_id, ("editing", "ready")):
+            a, clip = store.read(job_id)
+            planned = plan.plan(a.subjects, clip.cuts, clip.frame_count)
+            todo = plan.missing(planned, a.segments)
+            failures = worker.failures(job_id)
+            failed = [failures[seg.key] for _, seg in todo if seg.key in failures]
+            if failed:
+                raise ApiError(409, f"{len(failed)} segments failed to track: {failed[0]}")
+            if todo:
+                raise ApiError(409, f"{len(todo)} segments are still tracking")
+            boxed = {s.id for s in a.subjects if plan.boxes_by_frame(plan.plan_subject(s.keyframes, clip.cuts, clip.frame_count), a.segments)}
+            for i, s in enumerate(a.subjects):
+                if s.id in boxed and s.name == "":
+                    raise ApiError(422, "every subject with a label needs a name", f"subjects[{i}].name")
+            if not boxed:
+                raise ApiError(422, "click the video to place at least one subject", "subjects")
+            started = time.perf_counter()
+            build(paths.work_dir / job_id, paths.templates_dir, ShapeParams())
+            log.info("saved %s in %.2f s", job_id, time.perf_counter() - started)
+            return job_out(jobs.transition(job_id, Saved()))
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry(job_id: str) -> dict:
@@ -220,6 +228,6 @@ def create_app(paths: Paths) -> FastAPI:
     return app
 
 
-def serve(paths: Paths, port: int) -> None:
+def serve(paths: Paths, port: int, web_port: int) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    uvicorn.run(create_app(paths), host="127.0.0.1", port=port, workers=1)
+    uvicorn.run(create_app(paths, web_port), host="127.0.0.1", port=port, workers=1)

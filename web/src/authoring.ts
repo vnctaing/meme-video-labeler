@@ -1,7 +1,5 @@
-import { type TemplateId, TemplateError, array, int, isRecord, record, slug, string } from "./template.ts";
-
-type Brand<T, B extends string> = T & { readonly __brand: B };
-export type TrackId = Brand<string, "TrackId">;
+import type { WireRun } from "./schema.ts";
+import { type FrameIndex, type SubjectId, type TemplateId, TemplateError, array, int, isRecord, record, slug, string } from "./template.ts";
 
 export interface SourceFacts {
   readonly videoId: string;
@@ -21,17 +19,16 @@ export interface Clip {
   readonly license: string;
 }
 
-export type Step = "download" | "track" | "build";
+export type Step = "download" | "prepare";
 
 export type Running =
   | { readonly kind: "downloading"; readonly source: SourceFacts }
-  | { readonly kind: "tracking"; readonly source: SourceFacts; readonly clip: Clip }
-  | { readonly kind: "building"; readonly source: SourceFacts; readonly clip: Clip };
+  | { readonly kind: "preparing"; readonly source: SourceFacts; readonly clip: Clip };
 
 export type JobState =
   | Running
   | { readonly kind: "downloaded"; readonly source: SourceFacts }
-  | { readonly kind: "tracked"; readonly source: SourceFacts; readonly clip: Clip }
+  | { readonly kind: "editing"; readonly source: SourceFacts; readonly clip: Clip }
   | { readonly kind: "ready"; readonly source: SourceFacts; readonly clip: Clip }
   | { readonly kind: "failed"; readonly step: Step; readonly message: string; readonly resume: Running };
 
@@ -50,34 +47,45 @@ export interface Job {
   readonly progress: Progress | null;
 }
 
-export interface TrackCard {
-  readonly id: TrackId;
-  readonly shot: number;
-  readonly first: number;
-  readonly last: number;
-  readonly detections: number;
-  readonly sheetUrl: string;
-}
+export type Keyframe =
+  | { readonly frame: FrameIndex; readonly point: readonly [number, number] }
+  | { readonly frame: FrameIndex; readonly hidden: true };
 
-export interface Person {
+export interface SubjectDoc {
+  readonly id: SubjectId;
   readonly name: string;
-  readonly tracks: readonly TrackId[];
+  readonly color: string;
+  readonly keyframes: readonly Keyframe[];
 }
 
-export interface Issue {
-  readonly person: number;
-  readonly blocking: boolean;
-  readonly message: string;
+interface SegmentSpan {
+  readonly key: string;
+  readonly from: FrameIndex;
+  readonly to: FrameIndex;
 }
 
-export interface People {
-  readonly tracksId: string;
+export type SegmentView = SegmentSpan &
+  (
+    | { readonly status: "done" | "queued" }
+    | { readonly status: "running"; readonly done: number; readonly total: number | null }
+    | { readonly status: "failed"; readonly message: string }
+  );
+
+export interface SubjectTrack {
+  readonly runs: readonly WireRun[];
+  readonly segments: readonly SegmentView[];
+}
+
+export interface AuthoringView {
+  readonly rev: number;
+  readonly title: string;
   readonly fps: number;
   readonly frameCount: number;
+  readonly width: number;
+  readonly height: number;
   readonly cuts: readonly number[];
-  readonly tracks: readonly TrackCard[];
-  readonly people: readonly Person[];
-  readonly issues: readonly Issue[];
+  readonly subjects: readonly SubjectDoc[];
+  readonly tracks: ReadonlyMap<SubjectId, SubjectTrack>;
 }
 
 export class ServerNotAnswering extends Error {
@@ -138,8 +146,8 @@ function parseClip(v: unknown, path: string): Clip {
   };
 }
 
-const RUNNING_KINDS = ["downloading", "tracking", "building"] as const;
-const KINDS = [...RUNNING_KINDS, "downloaded", "tracked", "ready", "failed"] as const;
+const RUNNING_KINDS = ["downloading", "preparing"] as const;
+const KINDS = [...RUNNING_KINDS, "downloaded", "editing", "ready", "failed"] as const;
 
 function parseRunning(v: unknown, path: string): Running {
   const o = record(v, path);
@@ -156,16 +164,15 @@ function parseState(v: unknown, path: string): JobState {
     case "failed":
       return {
         kind,
-        step: oneOf(o.step, `${path}.step`, ["download", "track", "build"] as const),
+        step: oneOf(o.step, `${path}.step`, ["download", "prepare"] as const),
         message: string(o.message, `${path}.message`),
         resume: parseRunning(o.resume, `${path}.resume`),
       };
     case "downloading":
     case "downloaded":
       return { kind, source: parseSource(o.source, `${path}.source`) };
-    case "tracking":
-    case "tracked":
-    case "building":
+    case "preparing":
+    case "editing":
     case "ready":
       return { kind, source: parseSource(o.source, `${path}.source`), clip: parseClip(o.clip, `${path}.clip`) };
     default: {
@@ -197,63 +204,82 @@ export function parseJob(json: unknown, path = "$"): Job {
   };
 }
 
-function parsePerson(v: unknown, path: string): Person {
+function parseKeyframe(v: unknown, path: string): Keyframe {
+  const o = record(v, path);
+  const frame = int(o.frame, `${path}.frame`, 0) as FrameIndex;
+  if (o.hidden === true) return { frame, hidden: true };
+  const p = array(o.point, `${path}.point`);
+  if (p.length !== 2) throw new TemplateError(`${path}.point`, "expected [x, y]");
+  return { frame, point: [int(p[0], `${path}.point[0]`, 0), int(p[1], `${path}.point[1]`, 0)] };
+}
+
+function parseSubjectDoc(v: unknown, path: string): SubjectDoc {
   const o = record(v, path);
   return {
+    id: slug(o.id, `${path}.id`) as SubjectId,
     name: string(o.name, `${path}.name`),
-    tracks: array(o.tracks, `${path}.tracks`).map((t, i) => string(t, `${path}.tracks[${i}]`) as TrackId),
+    color: string(o.color, `${path}.color`),
+    keyframes: array(o.keyframes, `${path}.keyframes`).map((k, i) => parseKeyframe(k, `${path}.keyframes[${i}]`)),
   };
 }
 
-export function parsePeople(json: unknown): People {
-  const o = record(json, "$");
-  const frameCount = int(o.frameCount, "$.frameCount", 1);
+function parseSegment(v: unknown, path: string): SegmentView {
+  const o = record(v, path);
+  const span = { key: string(o.key, `${path}.key`), from: int(o.from, `${path}.from`, 0) as FrameIndex, to: int(o.to, `${path}.to`, 1) as FrameIndex };
+  const status = oneOf(o.status, `${path}.status`, ["done", "queued", "running", "failed"] as const);
+  switch (status) {
+    case "done":
+    case "queued":
+      return { ...span, status };
+    case "running":
+      return { ...span, status, done: int(o.done, `${path}.done`, 0), total: o.total === null ? null : int(o.total, `${path}.total`, 1) };
+    case "failed":
+      return { ...span, status, message: string(o.message, `${path}.message`) };
+    default: {
+      const _exhaustive: never = status;
+      return _exhaustive;
+    }
+  }
+}
+
+function parseRun(v: unknown, path: string): WireRun {
+  const o = record(v, path);
   return {
-    tracksId: string(o.tracksId, "$.tracksId"),
-    fps: int(o.fps, "$.fps", 1),
-    frameCount,
-    cuts: array(o.cuts, "$.cuts").map((c, i) => int(c, `$.cuts[${i}]`, 1)),
-    tracks: array(o.tracks, "$.tracks").map((v, i): TrackCard => {
-      const p = `$.tracks[${i}]`;
-      const t = record(v, p);
-      return {
-        id: string(t.id, `${p}.id`) as TrackId,
-        shot: int(t.shot, `${p}.shot`, 1),
-        first: int(t.first, `${p}.first`, 0),
-        last: int(t.last, `${p}.last`, 0),
-        detections: int(t.detections, `${p}.detections`, 1),
-        sheetUrl: string(t.sheetUrl, `${p}.sheetUrl`),
-      };
-    }),
-    people: array(o.people, "$.people").map((v, i) => parsePerson(v, `$.people[${i}]`)),
-    issues: array(o.issues, "$.issues").map((v, i): Issue => {
-      const p = `$.issues[${i}]`;
-      const t = record(v, p);
-      return { person: int(t.person, `${p}.person`, -1), blocking: bool(t.blocking, `${p}.blocking`), message: string(t.message, `${p}.message`) };
+    from: int(o.from, `${path}.from`, 0),
+    boxes: array(o.boxes, `${path}.boxes`).map((b, i) => {
+      const a = array(b, `${path}.boxes[${i}]`);
+      if (a.length !== 4) throw new TemplateError(`${path}.boxes[${i}]`, "expected [x, y, w, h]");
+      return [int(a[0], `${path}.boxes[${i}][0]`, 0), int(a[1], `${path}.boxes[${i}][1]`, 0), int(a[2], `${path}.boxes[${i}][2]`, 1), int(a[3], `${path}.boxes[${i}][3]`, 1)];
     }),
   };
 }
 
-export function ignored(p: Pick<People, "tracks" | "people">): readonly TrackId[] {
-  const grouped = new Set(p.people.flatMap((person) => person.tracks));
-  return p.tracks.map((t) => t.id).filter((id) => !grouped.has(id));
-}
-
-export type Destination = number | "new" | "ignore";
-
-export function moveTrack(people: readonly Person[], track: TrackId, to: Destination): readonly Person[] {
-  const without = people.map((p) => ({ name: p.name, tracks: p.tracks.filter((t) => t !== track) }));
-  const moved =
-    typeof to === "number"
-      ? without.map((p, i) => (i === to ? { name: p.name, tracks: [...p.tracks, track] } : p))
-      : to === "new"
-        ? [...without, { name: "", tracks: [track] }]
-        : without;
-  return moved.filter((p) => p.tracks.length > 0);
-}
-
-export function renamePerson(people: readonly Person[], index: number, name: string): readonly Person[] {
-  return people.map((p, i) => (i === index ? { name, tracks: p.tracks } : p));
+export function parseAuthoring(json: unknown): AuthoringView {
+  const o = record(json, "$");
+  const tracks = record(o.tracks, "$.tracks");
+  return {
+    rev: int(o.rev, "$.rev", 0),
+    title: string(o.title, "$.title"),
+    fps: int(o.fps, "$.fps", 1),
+    frameCount: int(o.frameCount, "$.frameCount", 1),
+    width: int(o.width, "$.width", 1),
+    height: int(o.height, "$.height", 1),
+    cuts: array(o.cuts, "$.cuts").map((c, i) => int(c, `$.cuts[${i}]`, 1)),
+    subjects: array(o.subjects, "$.subjects").map((s, i) => parseSubjectDoc(s, `$.subjects[${i}]`)),
+    tracks: new Map(
+      Object.entries(tracks).map(([id, t]): [SubjectId, SubjectTrack] => {
+        const p = `$.tracks.${id}`;
+        const r = record(t, p);
+        return [
+          id as SubjectId,
+          {
+            runs: array(r.runs, `${p}.runs`).map((run, i) => parseRun(run, `${p}.runs[${i}]`)),
+            segments: array(r.segments, `${p}.segments`).map((seg, i) => parseSegment(seg, `${p}.segments[${i}]`)),
+          },
+        ];
+      }),
+    ),
+  };
 }
 
 const PROXY_UPSTREAM_DOWN = new Set([502, 503, 504]);
@@ -285,10 +311,10 @@ export const createJob = async (url: string, id: string | null): Promise<Job> =>
 export const getJob = async (id: TemplateId): Promise<Job> => parseJob(await request("GET", jobUrl(id)));
 export const chooseClip = async (id: TemplateId, clip: Clip): Promise<Job> =>
   parseJob(await request("PUT", jobUrl(id, "/clip"), clip));
-export const getPeople = async (id: TemplateId): Promise<People> => parsePeople(await request("GET", jobUrl(id, "/people")));
-export const savePeople = async (id: TemplateId, tracksId: string, people: readonly Person[]): Promise<People> =>
-  parsePeople(await request("PUT", jobUrl(id, "/people"), { tracksId, people }));
-export const requestBuild = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/build")));
-export const reopen = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/reopen")));
+export const getAuthoring = async (id: TemplateId): Promise<AuthoringView> => parseAuthoring(await request("GET", jobUrl(id, "/authoring")));
+export const putAuthoring = async (id: TemplateId, title: string, subjects: readonly SubjectDoc[]): Promise<AuthoringView> =>
+  parseAuthoring(await request("PUT", jobUrl(id, "/authoring"), { title, subjects }));
+export const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
+export const save = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/save")));
 export const retry = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/retry")));
 export const sourceUrl = (id: TemplateId): string => jobUrl(id, "/source.mp4");

@@ -15,8 +15,8 @@ from typing import Literal
 
 from labelmeme.schema import SLUG
 
-Step = Literal["download", "track", "build"]
-STEPS: tuple[Step, ...] = ("download", "track", "build")
+Step = Literal["download", "prepare"]
+STEPS: tuple[Step, ...] = ("download", "prepare")
 
 MAX_CLIP_SECONDS = 30.0
 MIN_CLIP_SECONDS = 1.0
@@ -70,24 +70,17 @@ class Downloaded:
 
 
 @dataclass(frozen=True, slots=True)
-class Tracking:
+class Preparing:
     source: SourceFacts
     clip: Clip
-    kind: Literal["tracking"] = "tracking"
+    kind: Literal["preparing"] = "preparing"
 
 
 @dataclass(frozen=True, slots=True)
-class Tracked:
+class Editing:
     source: SourceFacts
     clip: Clip
-    kind: Literal["tracked"] = "tracked"
-
-
-@dataclass(frozen=True, slots=True)
-class Building:
-    source: SourceFacts
-    clip: Clip
-    kind: Literal["building"] = "building"
+    kind: Literal["editing"] = "editing"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,7 +90,7 @@ class Ready:
     kind: Literal["ready"] = "ready"
 
 
-Running = Downloading | Tracking | Building
+Running = Downloading | Preparing
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +101,7 @@ class Failed:
     kind: Literal["failed"] = "failed"
 
 
-State = Downloading | Downloaded | Tracking | Tracked | Building | Ready | Failed
+State = Downloading | Downloaded | Preparing | Editing | Ready | Failed
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +113,11 @@ class Job:
 
 
 def is_running(state: State) -> bool:
-    return isinstance(state, (Downloading, Tracking, Building))
+    return isinstance(state, (Downloading, Preparing))
+
+
+def is_editable(state: State) -> bool:
+    return isinstance(state, (Editing, Ready))
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,12 +136,7 @@ class ClipChosen:
 
 
 @dataclass(frozen=True, slots=True)
-class BuildRequested:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class Reopen:
+class Saved:
     pass
 
 
@@ -153,11 +145,9 @@ class Retry:
     pass
 
 
-Event = StepDone | StepFailed | ClipChosen | BuildRequested | Reopen | Retry
+Event = StepDone | StepFailed | ClipChosen | Saved | Retry
 
-EVENT_NAMES: dict[type, str] = {
-    StepDone: "done", StepFailed: "fail", ClipChosen: "clip", BuildRequested: "build", Reopen: "reopen", Retry: "retry",
-}
+EVENT_NAMES: dict[type, str] = {StepDone: "done", StepFailed: "fail", ClipChosen: "clip", Saved: "save", Retry: "retry"}
 
 
 class Conflict(Exception):
@@ -172,24 +162,16 @@ def advance(state: State, event: Event) -> State:
     match state, event:
         case Downloading(source=s), StepDone():
             return Downloaded(s)
-        case Tracking(source=s, clip=c), StepDone():
-            return Tracked(s, c)
-        case Building(source=s, clip=c), StepDone():
-            return Ready(s, c)
+        case Preparing(source=s, clip=c), StepDone():
+            return Editing(s, c)
         case Downloading(), StepFailed(message=m):
             return Failed("download", m, state)
-        case Tracking(), StepFailed(message=m):
-            return Failed("track", m, state)
-        case Building(), StepFailed(message=m):
-            return Failed("build", m, state)
-        case Downloaded(source=s) | Tracked(source=s) | Ready(source=s), ClipChosen(clip=c):
-            return Tracking(s, c)
-        case Failed(resume=Tracking(source=s) | Building(source=s)), ClipChosen(clip=c):
-            return Tracking(s, c)
-        case Tracked(source=s, clip=c), BuildRequested():
-            return Building(s, c)
-        case Ready(source=s, clip=c) | Failed(resume=Building(source=s, clip=c)), Reopen():
-            return Tracked(s, c)
+        case Preparing(), StepFailed(message=m):
+            return Failed("prepare", m, state)
+        case Downloaded(source=s) | Editing(source=s) | Ready(source=s) | Failed(resume=Preparing(source=s)), ClipChosen(clip=c):
+            return Preparing(s, c)
+        case Editing(source=s, clip=c) | Ready(source=s, clip=c), Saved():
+            return Ready(s, c)
         case Failed(resume=r), Retry():
             return r
     raise Conflict(f"cannot {EVENT_NAMES[type(event)]} while the job is {_describe(state)}")
@@ -212,7 +194,7 @@ def state_json(state: State) -> dict:
     match state:
         case Downloading(source=s) | Downloaded(source=s):
             return {"kind": state.kind, "source": _source_json(s)}
-        case Tracking(source=s, clip=c) | Tracked(source=s, clip=c) | Building(source=s, clip=c) | Ready(source=s, clip=c):
+        case Preparing(source=s, clip=c) | Editing(source=s, clip=c) | Ready(source=s, clip=c):
             return {"kind": state.kind, "source": _source_json(s), "clip": _clip_json(c)}
         case Failed(step=step, message=m, resume=r):
             return {"kind": "failed", "step": step, "message": m, "resume": state_json(r)}
@@ -273,8 +255,8 @@ def _kind(o: dict, path: str, allowed: tuple[str, ...]) -> str:
     return kind
 
 
-RUNNING_KINDS = ("downloading", "tracking", "building")
-KINDS = (*RUNNING_KINDS, "downloaded", "tracked", "ready", "failed")
+RUNNING_KINDS = ("downloading", "preparing")
+KINDS = (*RUNNING_KINDS, "downloaded", "editing", "ready", "failed")
 
 
 def _parse_state(v: object, path: str, allowed: tuple[str, ...] = KINDS) -> State:
@@ -294,12 +276,10 @@ def _parse_state(v: object, path: str, allowed: tuple[str, ...] = KINDS) -> Stat
             return Downloaded(source)
     clip = _parse_clip(o.get("clip"), f"{path}.clip")
     match kind:
-        case "tracking":
-            return Tracking(source, clip)
-        case "tracked":
-            return Tracked(source, clip)
-        case "building":
-            return Building(source, clip)
+        case "preparing":
+            return Preparing(source, clip)
+        case "editing":
+            return Editing(source, clip)
         case _:
             return Ready(source, clip)
 
@@ -341,15 +321,15 @@ def derive_id(title: str, taken: set[str]) -> str:
 
 log = logging.getLogger(__name__)
 
-OnRunning = Callable[[Job, bool], None]
+Enqueue = Callable[[Job, bool], None]
 
 
 class Jobs:
-    def __init__(self, work_dir: Path, templates_dir: Path, on_running: OnRunning) -> None:
+    def __init__(self, work_dir: Path, templates_dir: Path, enqueue: Enqueue) -> None:
         self._work_dir = work_dir
         self._templates_dir = templates_dir
         self._lock = threading.RLock()
-        self._on_running = on_running
+        self._enqueue = enqueue
 
     def _path(self, job_id: str) -> Path:
         return self._work_dir / job_id / "job.json"
@@ -374,7 +354,7 @@ class Jobs:
             job = Job(job_id, source.url, datetime.now(UTC).isoformat(timespec="microseconds"), Downloading(source))
             self._path(job_id).parent.mkdir(parents=True)
             write_atomic(self._path(job_id), dump_job(job))
-        self._on_running(job, False)
+        self._enqueue(job, False)
         return job
 
     def get(self, job_id: str) -> Job:
@@ -395,7 +375,7 @@ class Jobs:
             job = Job(current.id, current.url, current.created_at, advance(current.state, event))
             write_atomic(self._path(job_id), dump_job(job))
         if is_running(job.state):
-            self._on_running(job, False)
+            self._enqueue(job, False)
         return job
 
     @contextmanager
@@ -407,7 +387,7 @@ class Jobs:
             yield job
 
     def recover(self) -> list[Job]:
-        running = sorted((j for j in self.list() if is_running(j.state)), key=lambda j: j.created_at)
-        for job in running:
-            self._on_running(job, True)
-        return running
+        pending = sorted((j for j in self.list() if is_running(j.state) or is_editable(j.state)), key=lambda j: j.created_at)
+        for job in pending:
+            self._enqueue(job, True)
+        return pending

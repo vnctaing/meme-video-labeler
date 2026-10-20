@@ -1,39 +1,26 @@
 import {
   ApiError,
   type Clip,
-  type Destination,
-  type Issue,
   type Job,
   type JobState,
-  type People,
-  type Person,
   type Running,
   ServerNotAnswering,
   type SourceFacts,
-  type TrackCard,
-  type TrackId,
   chooseClip,
   createJob,
+  getAuthoring,
   getJob,
-  getPeople,
-  ignored,
   listJobs,
-  moveTrack,
-  renamePerson,
-  reopen,
-  requestBuild,
   retry,
-  savePeople,
   sourceUrl,
 } from "./authoring.ts";
 import { type View, el } from "./dom.ts";
+import { mountSubjectEditor } from "./subject-editor.ts";
 import type { TemplateId } from "./template.ts";
 
 const MAX_CLIP_SECONDS = 30;
 const DEFAULT_LICENSE = "unknown, personal use";
 const POLL_MS = 500;
-const SAVE_DEBOUNCE_MS = 300;
-const COLORS = ["#f5b800", "#2f7df6", "#3cc46a", "#e054d8", "#ff6a3d", "#20c4c4", "#a77bff", "#c9a36b"];
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -101,15 +88,12 @@ export async function jobView(id: TemplateId): Promise<View> {
   let timer = 0;
   let teardownPanel: () => void = () => {};
   const title = el("h1", {}, id);
+  const header = el("header", {}, el("a", { className: "back", href: "#/new" }, "← New template"), title);
   const panel = el("main", { className: "author" });
 
   const show = (next: Job) => {
-    const previous = job?.state.kind;
     job = next;
-    if (previous === "building" && next.state.kind === "ready") {
-      location.hash = `#/t/${id}`;
-      return;
-    }
+    header.hidden = next.state.kind === "editing" || next.state.kind === "ready";
     teardownPanel();
     const built = stepPanel(next, show);
     teardownPanel = built.teardown;
@@ -144,7 +128,7 @@ export async function jobView(id: TemplateId): Promise<View> {
     schedule();
   } else show(job);
   return {
-    nodes: [el("header", {}, el("a", { className: "back", href: "#/new" }, "← New template"), title), panel],
+    nodes: [header, panel],
     teardown: () => {
       alive = false;
       clearTimeout(timer);
@@ -154,7 +138,7 @@ export async function jobView(id: TemplateId): Promise<View> {
 }
 
 function isRunning(state: JobState): state is Running {
-  return state.kind === "downloading" || state.kind === "tracking" || state.kind === "building";
+  return state.kind === "downloading" || state.kind === "preparing";
 }
 
 interface Panel {
@@ -168,15 +152,13 @@ function stepPanel(job: Job, show: (job: Job) => void): Panel {
   const state = job.state;
   switch (state.kind) {
     case "downloading":
-    case "tracking":
-    case "building":
+    case "preparing":
       return still(progressPanel(job));
     case "downloaded":
       return still(clipPanel(job.id, state.source, null, show));
-    case "tracked":
-      return peoplePanel(job.id, state.source, state.clip, show);
+    case "editing":
     case "ready":
-      return still(readyPanel(job.id, state.source, state.clip, show));
+      return editorPanel(job.id, state.source, state.clip, show);
     case "failed":
       return still(failedPanel(job, state, show));
     default: {
@@ -197,12 +179,8 @@ function progressText(job: Job | null): string {
       const mb = (n: number) => (n / 1e6).toFixed(0);
       return total === null ? `Downloading ${mb(done)} MB` : `Downloading ${mb(done)} / ${mb(total)} MB`;
     }
-    case "tracking":
-      if (total === null || done === 0) return "Encoding the clip, finding cuts, loading the model";
-      if (done >= total) return "Writing crop sheets";
-      return `Tracking people: frame ${done} of ${total}`;
-    case "building":
-      return "Building the template";
+    case "preparing":
+      return "Encoding the clip and finding cuts";
     default:
       return job.state.kind;
   }
@@ -227,13 +205,11 @@ function stepTitle(state: JobState): string {
       return "1. Download";
     case "downloaded":
       return "2. Choose the clip";
-    case "tracking":
-      return "3. Track people";
-    case "tracked":
-      return "4. Name the people";
-    case "building":
+    case "preparing":
+      return "Preparing the clip";
+    case "editing":
     case "ready":
-      return "5. Build";
+      return "3. Subjects";
     case "failed":
       return `Failed at ${state.step}`;
     default: {
@@ -278,7 +254,7 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
   const titleField = text("clip-title", "Title", current?.title ?? source.title);
   const creditField = text("clip-credit", "Credit", current?.credit ?? `${source.title}, ${source.channel}, YouTube`);
   const licenseField = text("clip-license", "License", current?.license ?? DEFAULT_LICENSE);
-  const submit = el("button", { type: "submit" }, current === null ? "Track people" : "Track this clip again");
+  const submit = el("button", { type: "submit" }, current === null ? "Use this clip" : "Use this clip instead");
 
   const range = () => ({ start: Number(startInput.value), end: Number(endInput.value) });
   const problem = (): string | null => {
@@ -375,170 +351,30 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
     { className: "clip-panel" },
     el("h2", {}, current === null ? "2. Choose the clip" : "Change the clip"),
     el("p", { className: "hint" }, `${source.title} · ${source.channel} · ${seconds(duration)}`),
-    current === null ? "" : el("p", { className: "hint" }, "Tracking again discards the current people groups."),
+    current === null ? "" : el("p", { className: "hint" }, "A new clip discards every subject and keyframe."),
     form,
   );
 }
 
-function trackCard(card: TrackCard, fps: number, color: string | null, destinations: readonly [string, Destination][], selected: Destination, onMove: (to: Destination) => void): HTMLElement {
-  const select = el("select", { ariaLabel: `Move ${card.id} to` });
-  destinations.forEach(([label, value], i) => {
-    select.append(el("option", { value: String(i), selected: value === selected }, label));
-  });
-  select.addEventListener("change", () => onMove(destinations[Number(select.value)][1]));
-  const span = (card.last - card.first + 1) / fps;
-  const node = el(
-    "figure",
-    { className: "track-card" },
-    el("img", { src: card.sheetUrl, alt: `crops of track ${card.id}`, loading: "lazy" }),
-    el("figcaption", {}, `${card.id} · shot ${card.shot} · frames ${card.first}-${card.last} · ${seconds(span)}`, select),
-  );
-  node.dataset.track = card.id;
-  if (color !== null) node.style.borderColor = color;
-  return node;
-}
-
-function timeline(tracks: readonly TrackCard[], frameCount: number, cuts: readonly number[], color: string): HTMLElement {
-  const bar = el("div", { className: "timeline" });
-  const pct = (f: number) => `${(100 * f) / frameCount}%`;
-  for (const cut of cuts) {
-    const tick = el("span", { className: "cut" });
-    tick.style.left = pct(cut);
-    bar.append(tick);
-  }
-  for (const t of tracks) {
-    const overlapped = tracks.some((o) => o !== t && o.shot === t.shot && Math.min(o.last, t.last) - Math.max(o.first, t.first) > 4);
-    const span = el("span", { className: overlapped ? "span overlap" : "span", title: t.id });
-    span.style.left = pct(t.first);
-    span.style.width = pct(t.last - t.first + 1);
-    span.style.background = color;
-    bar.append(span);
-  }
-  return bar;
-}
-
-function peoplePanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): Panel {
-  const node = el("section", { className: "people-panel" }, el("h2", {}, "4. Name the people"), el("p", { role: "status" }, "Loading tracks…"));
-  let board: People | null = null;
-  let timer = 0;
-  let saving: Promise<void> = Promise.resolve();
-  let saveSeq = 0;
-  const buildButton = el("button", { type: "button", className: "build" }, "Build template");
-  const buildError = el("p", { className: "field-error" });
-  const issueBoxes: HTMLElement[] = [];
-  const globalIssues = el("div", { className: "issues" });
-
-  const renderIssues = (issues: readonly Issue[]) => {
-    for (const [i, box] of issueBoxes.entries()) box.replaceChildren(...issues.filter((x) => x.person === i).map(issueLine));
-    globalIssues.replaceChildren(...issues.filter((x) => x.person === -1).map(issueLine));
-    buildButton.disabled = issues.some((x) => x.blocking);
-  };
-
-  const save = () => {
-    clearTimeout(timer);
-    if (board === null) return saving;
-    const snapshot = board;
-    const seq = ++saveSeq;
-    saving = saving
-      .then(() => savePeople(id, snapshot.tracksId, snapshot.people))
-      .then((next) => {
-        if (seq !== saveSeq || board === null) return;
-        board = { ...board, issues: next.issues };
-        renderIssues(next.issues);
-        buildError.textContent = "";
-      })
-      .catch((e: unknown) => {
-        buildError.textContent = `Could not save: ${message(e)}`;
-      });
-    return saving;
-  };
-  const scheduleSave = () => {
-    clearTimeout(timer);
-    buildButton.disabled = true;
-    timer = window.setTimeout(() => void save(), SAVE_DEBOUNCE_MS);
-  };
-
-  const render = () => {
-    if (board === null) return;
-    const b = board;
-    const byId = new Map(b.tracks.map((t) => [t.id, t]));
-    const destinations: [string, Destination][] = [
-      ...b.people.map((p, i): [string, Destination] => [`Person ${i + 1}${p.name ? `: ${p.name}` : ""}`, i]),
-      ["New person", "new"],
-      ["Ignore", "ignore"],
-    ];
-    const move = (track: TrackId) => (to: Destination) => {
-      if (board === null) return;
-      board = { ...board, people: moveTrack(board.people, track, to) };
-      render();
-      scheduleSave();
-    };
-    issueBoxes.length = 0;
-    const rows = b.people.map((p: Person, i) => {
-      const color = COLORS[i % COLORS.length];
-      const name = el("input", { type: "text", value: p.name, placeholder: "Who is this?", ariaLabel: `Name of person ${i + 1}`, maxLength: 60 });
-      name.addEventListener("input", () => {
-        if (board === null) return;
-        board = { ...board, people: renamePerson(board.people, i, name.value) };
-        scheduleSave();
-      });
-      name.addEventListener("change", render);
-      const cards = p.tracks.flatMap((t) => byId.get(t) ?? []);
-      const issues = el("div", { className: "issues" });
-      issueBoxes.push(issues);
-      const row = el(
-        "section",
-        { className: "person" },
-        el("div", { className: "person-head" }, el("span", { className: "swatch" }), name),
-        timeline(cards, b.frameCount, b.cuts, color),
-        issues,
-        el("div", { className: "cards" }, ...cards.map((c) => trackCard(c, b.fps, color, destinations, i, move(c.id)))),
-      );
-      row.style.setProperty("--person", color);
-      row.dataset.person = String(i);
-      return row;
-    });
-    const ignoredCards = ignored(b).flatMap((t) => byId.get(t) ?? []);
-    const tray = el(
-      "section",
-      { className: "ignored" },
-      el("h3", {}, `Ignored (${ignoredCards.length})`),
-      el("div", { className: "cards" }, ...ignoredCards.map((c) => trackCard(c, b.fps, null, destinations, "ignore", move(c.id)))),
-    );
-    node.replaceChildren(
-      el("h2", {}, "4. Name the people"),
-      el("p", { className: "hint" }, "Each row is one person. Give it a name, and use “Move to” on a card to put the same person from another shot, or seen from behind, in that row. Cards in the Ignored tray do not get a label."),
-      globalIssues,
-      ...rows,
-      tray,
-      el("div", { className: "build-row" }, buildButton, buildError, changeClipLink(id, source, clip, show)),
-    );
-    renderIssues(b.issues);
-  };
-
-  buildButton.addEventListener("click", async () => {
-    buildButton.disabled = true;
-    await save();
-    try {
-      show(await requestBuild(id));
-    } catch (e) {
-      buildError.textContent = message(e);
-      buildButton.disabled = false;
-    }
-  });
-
-  getPeople(id)
-    .then((people) => {
-      board = people;
-      render();
+function editorPanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): Panel {
+  const node = el("section", { className: "subject-editor" }, el("p", { role: "status" }, "Loading the editor…"));
+  let alive = true;
+  let destroy = () => {};
+  getAuthoring(id)
+    .then((view) => {
+      if (!alive) return;
+      node.replaceChildren();
+      destroy = mountSubjectEditor(node, id, view).destroy;
+      node.append(changeClipLink(id, source, clip, show));
     })
     .catch((e: unknown) => node.replaceChildren(el("p", { className: "field-error" }, message(e))));
-
-  return { node, teardown: () => clearTimeout(timer) };
-}
-
-function issueLine(issue: Issue): HTMLElement {
-  return el("p", { className: issue.blocking ? "issue blocking" : "issue" }, issue.message);
+  return {
+    node,
+    teardown: () => {
+      alive = false;
+      destroy();
+    },
+  };
 }
 
 function changeClipLink(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): HTMLElement {
@@ -547,19 +383,6 @@ function changeClipLink(id: TemplateId, source: SourceFacts, clip: Clip, show: (
     if (details.open && details.childElementCount === 1) details.append(clipPanel(id, source, clip, show));
   });
   return details;
-}
-
-function readyPanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): HTMLElement {
-  const regroup = el("button", { type: "button" }, "Regroup people");
-  regroup.addEventListener("click", async () => show(await reopen(id)));
-  return el(
-    "section",
-    {},
-    el("h2", {}, "Template ready"),
-    el("p", {}, el("a", { href: `#/t/${id}` }, "Open it in the editor")),
-    regroup,
-    changeClipLink(id, source, clip, show),
-  );
 }
 
 function failedPanel(job: Job, state: Extract<JobState, { kind: "failed" }>, show: (job: Job) => void): HTMLElement {
@@ -582,7 +405,6 @@ function failedPanel(job: Job, state: Extract<JobState, { kind: "failed" }>, sho
     el("h2", {}, `The ${state.step} step failed`),
     el("p", { className: "failure", role: "alert" }, state.message),
     button("Retry", () => retry(job.id)),
-    state.step === "build" ? button("Back to people", () => reopen(job.id)) : "",
     resume.kind === "downloading" ? "" : changeClipLink(job.id, resume.source, resume.clip, show),
     error,
   );

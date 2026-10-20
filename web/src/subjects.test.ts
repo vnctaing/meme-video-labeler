@@ -26,6 +26,13 @@ describe("reduce", () => {
     expect(reduce(elsewhere, { kind: "removeKey" }, FRAMES).doc).toBe(elsewhere.doc);
   });
 
+  test("Delete and rename touch only their own subject when another subject has a key on the same frame", () => {
+    const eyepiece: SubjectDoc = { id: id("s2"), name: "Eyepiece", color: "#4c8dff", keyframes: [{ frame: 10 as FrameIndex, hidden: true }] };
+    const both: EditorState = { ...state(10), doc: { title: "T", subjects: [thom, eyepiece] } };
+    expect(reduce(both, { kind: "removeKey" }, FRAMES).doc.subjects).toEqual([{ ...thom, keyframes: [] }, eyepiece]);
+    expect(reduce(both, { kind: "rename", id: id("s2"), name: "Lens" }, FRAMES).doc.subjects).toEqual([thom, { ...eyepiece, name: "Lens" }]);
+  });
+
   test("editing keys without a selected subject changes nothing", () => {
     const s = state(20, null);
     expect(reduce(s, { kind: "place", point: [1, 1] }, FRAMES)).toBe(s);

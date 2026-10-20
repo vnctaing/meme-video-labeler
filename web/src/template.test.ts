@@ -71,6 +71,11 @@ describe("parseTemplate", () => {
     expect(parseTemplate(json, BASE).subjects[0].runs).toHaveLength(2);
   });
 
+  test("rejects adjacent runs that do not meet at a cut", () => {
+    const json = wire({ subjects: [{ id: "a", name: "A", runs: [run(4, 3), run(7, 3)] }] });
+    expect(errorPath(json)).toBe("$.subjects[0].runs[1].from");
+  });
+
   test("rejects a box outside the frame with the path of the box", () => {
     const r = run(0, 3);
     r.boxes[2] = [90, 10, 20, 20];
@@ -106,7 +111,7 @@ describe("frameIndexAt", () => {
 describe("placementAt", () => {
   const template: Template = parseTemplate(
     wire({
-      subjects: [{ id: "a", name: "A", runs: [run(0, 6), run(10, 10), run(20, 4), run(24, 10), run(40, 8)] }],
+      subjects: [{ id: "a", name: "A", runs: [run(0, 6), run(10, 9), run(20, 4), run(24, 10), run(40, 8)] }],
     }),
     BASE,
   );
@@ -114,7 +119,7 @@ describe("placementAt", () => {
   const alpha = (n: number) => placementAt(subject, f(n), template)?.alpha ?? null;
 
   test("is null outside every run", () => {
-    for (const n of [6, 9, 34, 39]) expect(placementAt(subject, f(n), template)).toBeNull();
+    for (const n of [6, 9, 19, 34, 39]) expect(placementAt(subject, f(n), template)).toBeNull();
   });
 
   test("returns the box of that frame inside a run", () => {
@@ -123,7 +128,7 @@ describe("placementAt", () => {
 
   test("ramps alpha linearly over the first and last 4 frames of a run between soft edges", () => {
     expect([10, 11, 12, 13, 14, 15].map(alpha)).toEqual([0.25, 0.5, 0.75, 1, 1, 1]);
-    expect([16, 17, 18, 19].map(alpha)).toEqual([1, 0.75, 0.5, 0.25]);
+    expect([15, 16, 17, 18].map(alpha)).toEqual([1, 0.75, 0.5, 0.25]);
   });
 
   test("keeps alpha 1 at edges touching a cut, frame 0 or frameCount", () => {

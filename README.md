@@ -60,10 +60,12 @@ Authoring a template takes five steps. The pipeline does the detection and shapi
 1. `prep` trims the source and re-encodes it to the frame grid the web app expects. It writes `work/<id>/video.mp4`, `thumb.jpg`, `SOURCE.md` and `video.json`.
 2. `track` finds the cuts and tracks every person. It writes `work/<id>/cuts.json`, `tracks.json`, the contact sheets in `work/<id>/sheets/`, and a `subjects.json` stub. On the first run it downloads `yolo11m.pt` into `models/`.
 3. Open `work/<id>/sheets/overview.jpg`. It shows one crop per track id, captioned with the id and its frame range. When a crop is ambiguous, open `sheets/track_<id>.jpg`, which shows 8 crops spread over that track.
-4. Edit `work/<id>/subjects.json`. Give each person a slug `id`, a display `name`, and the list of track ids that belong to them. Delete the entries for people who are not subjects.
+4. Edit `work/<id>/subjects.json`. Give each person a slug `id`, a display `name`, and the list of track ids that belong to them. Delete the entries for people who are not subjects. Keep the `tracksId` field. It identifies the cuts and tracks that the ids refer to.
 5. `build` merges and shapes the tracks, writes `web/public/templates/<id>/`, and regenerates `index.json`. Open `work/<id>/sheets/built.jpg` to check the boxes and names on sample frames from every shot.
 
 `track` keeps an existing `cuts.json` and an existing `subjects.json`, so your edits survive a rerun. If the scene detector misses a cut or finds a false one, edit the `frame` values in `cuts.json` and run `track` again. To detect the cuts again, delete `cuts.json`.
+
+A rerun of `track` can renumber the shots and the tracks, so a kept `subjects.json` can name the wrong people. `build` computes a `tracksId` from the current `cuts.json` and `tracks.json` and refuses to run when it differs from the `tracksId` in `subjects.json`. The error prints the new value. Check every track id in `subjects.json` against the new `overview.jpg`, then set `tracksId` to that value. A `subjects.json` without a `tracksId` field is refused the same way.
 
 The tracker restarts at every cut, so a track id never spans two shots. Track ids have the form `s<shot>-<n>`, for example `s3-2` for track 2 in the third shot. A person who is visible on both sides of a cut has one id per shot, and `subjects.json` lists them all.
 
@@ -92,6 +94,8 @@ uv run python -m labelmeme track tos-lab
 	]
 }
 ```
+
+The file also keeps the `tracksId` field from the stub.
 
 ```sh
 uv run python -m labelmeme build tos-lab
@@ -146,6 +150,7 @@ Each subject has an `id` (slug, unique within the template), a display `name`, a
 Invariants, enforced by `validate_template` before any write:
 
 - Runs of a subject are sorted by `from` and do not overlap.
+- Two runs of a subject touch only at a cut. Anywhere else at least one frame separates them, so a label never fades out and straight back in.
 - Every run lies inside `[0, frameCount)`.
 - No run crosses a cut. A run may start or end at a cut, so a subject visible on both sides of a cut has two runs.
 - Boxes are integer pixels in template coordinates with a top-left origin. `w` and `h` are at least 1, and the box lies inside the frame.

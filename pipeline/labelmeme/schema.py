@@ -58,15 +58,21 @@ def _require(ok: bool, path: str, message: str) -> None:
 
 
 def _require_int(v: object, path: str, minimum: int) -> None:
-    if not (isinstance(v, int) and not isinstance(v, bool)):
+    if not _is_int(v):
         raise ValueError(f"{path}: expected an integer, got {v!r}")
     _require(v >= minimum, path, f"expected >= {minimum}, got {v}")
 
 
+def _require_text(v: object, path: str) -> None:
+    _require(isinstance(v, str) and v != "", path, f"expected a non-empty string, got {v!r}")
+
+
 def validate_template(t: WireTemplate) -> None:
     """Raise ValueError naming the JSON path of the first broken invariant."""
-    _require(t["version"] == 1, "$.version", f"expected 1, got {t['version']!r}")
+    _require(_is_int(t["version"]) and t["version"] == 1, "$.version", f"expected 1, got {t['version']!r}")
     _require(isinstance(t["id"], str) and SLUG.fullmatch(t["id"]) is not None, "$.id", f"expected a slug, got {t['id']!r}")
+    _require_text(t["title"], "$.title")
+    _require(isinstance(t["credit"], str), "$.credit", f"expected a string, got {t['credit']!r}")
     for key in ("fps", "frameCount", "width", "height"):
         _require_int(t[key], f"$.{key}", 1)
     frame_count, width, height = t["frameCount"], t["width"], t["height"]
@@ -83,6 +89,7 @@ def validate_template(t: WireTemplate) -> None:
         _require(isinstance(sid, str) and SLUG.fullmatch(sid) is not None, f"{sp}.id", f"expected a slug, got {sid!r}")
         _require(sid not in seen_ids, f"{sp}.id", f"duplicate subject id {sid!r}")
         seen_ids.add(sid)
+        _require_text(subject["name"], f"{sp}.name")
 
         prev_end = 0
         for r, run in enumerate(subject["runs"]):
@@ -92,6 +99,11 @@ def validate_template(t: WireTemplate) -> None:
             _require(len(boxes) >= 1, f"{rp}.boxes", "a run needs at least one box")
             end = start + len(boxes)
             _require(start >= prev_end, f"{rp}.from", f"run starts at {start}, before the previous run ends at {prev_end}")
+            _require(
+                r == 0 or start > prev_end or start in cuts,
+                f"{rp}.from",
+                f"run starts at {start}, where the previous run ends, and {start} is not a cut",
+            )
             _require(end <= frame_count, rp, f"run ends at {end}, past frameCount {frame_count}")
             crossed = next((c for c in cuts if start < c < end), None)
             _require(crossed is None, rp, f"run [{start}, {end}) crosses cut {crossed}")

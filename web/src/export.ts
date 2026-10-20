@@ -58,6 +58,7 @@ export async function exportMp4(
     const reasons = conversion.discardedTracks.map((d) => `${d.track.type} track: ${d.reason}`).join(", ");
     throw new Error(`This browser cannot export this video (${reasons || "no usable tracks"}).`);
   }
+  signal?.throwIfAborted();
   conversion.onProgress = (fraction) => onProgress(fraction);
   const cancel = () => void conversion.cancel();
   signal?.addEventListener("abort", cancel, { once: true });

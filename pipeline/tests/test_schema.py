@@ -1,6 +1,7 @@
 import copy
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -84,3 +85,39 @@ def test_write_template_refuses_an_invalid_template(tmp_path: Path, template: Wi
     with pytest.raises(ValueError, match=r"^\$\.cuts\[0\]"):
         write_template(tmp_path, template, tmp_path / "v", tmp_path / "t", "")
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("version",), True, r"^\$\.version: expected 1"),
+        (("title",), None, r"^\$\.title: expected a non-empty string"),
+        (("title",), "", r"^\$\.title: expected a non-empty string"),
+        (("credit",), 5, r"^\$\.credit: expected a string"),
+        (("id",), 5, r"^\$\.id: expected a slug"),
+        (("subjects", 0, "name"), 5, r"^\$\.subjects\[0\]\.name: expected a non-empty string"),
+        (("subjects", 0, "name"), "", r"^\$\.subjects\[0\]\.name: expected a non-empty string"),
+        (("subjects", 0, "id"), 5, r"^\$\.subjects\[0\]\.id: expected a slug"),
+    ],
+)
+def test_rejects_wrongly_typed_fields(template: WireTemplate, path: tuple, value: object, message: str) -> None:
+    target: Any = template
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    with pytest.raises(ValueError, match=message):
+        validate_template(template)
+
+
+def test_rejects_adjacent_runs_that_do_not_meet_at_a_cut(template: WireTemplate) -> None:
+    bob = template["subjects"][1]
+    bob["runs"][1] = {"from": 20, "boxes": bob["runs"][1]["boxes"][:4]}
+    with pytest.raises(ValueError, match=r"^\$\.subjects\[1\]\.runs\[1\]\.from: run starts at 20, where the previous run ends, and 20 is not a cut"):
+        validate_template(template)
+
+
+def test_accepts_adjacent_runs_that_meet_at_a_cut(template: WireTemplate) -> None:
+    alice = template["subjects"][0]["runs"]
+    assert (alice[0]["from"] + len(alice[0]["boxes"]), alice[1]["from"]) == (24, 24)
+    assert template["cuts"] == [24]
+    validate_template(template)

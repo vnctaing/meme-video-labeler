@@ -125,6 +125,9 @@ function parseSubject(
     const end = from + boxes.length;
     if (boxes.length === 0) throw new TemplateError(`${rp}.boxes`, "a run needs at least one box");
     if (from < prevEnd) throw new TemplateError(rp, `run starts at ${from}, before the previous run ends at ${prevEnd}`);
+    if (i > 0 && from === prevEnd && !frame.cuts.includes(from)) {
+      throw new TemplateError(`${rp}.from`, `run starts at ${from}, where the previous run ends, and ${from} is not a cut`);
+    }
     if (end > frame.frameCount) throw new TemplateError(rp, `run ends at ${end}, past frameCount ${frame.frameCount}`);
     const crossed = frame.cuts.find((c) => from < c && c < end);
     if (crossed !== undefined) throw new TemplateError(rp, `run [${from}, ${end}) crosses the cut at ${crossed}`);

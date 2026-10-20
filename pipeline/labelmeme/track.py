@@ -49,8 +49,16 @@ def detect_cuts(video: Path, fps: int, threshold: float) -> list[Cut]:
     return [{"frame": f, "seconds": round(f / fps, 3), "score": round(s, 3)} for f, s in frames]
 
 
-def read_cuts(work: Path) -> list[int]:
-    return sorted({int(c["frame"]) for c in json.loads((work / "cuts.json").read_text(encoding="utf-8"))["cuts"]})
+def read_cuts(work: Path, frame_count: int) -> list[int]:
+    path = work / "cuts.json"
+    cuts: list[int] = []
+    for i, c in enumerate(json.loads(path.read_text(encoding="utf-8"))["cuts"]):
+        f = c["frame"]
+        valid = isinstance(f, int) and not isinstance(f, bool) and 0 < f < frame_count and (not cuts or cuts[-1] < f)
+        if not valid:
+            raise ValueError(f"{path}: cuts[{i}].frame must be an integer in (0, {frame_count}), sorted and unique, got {f!r}")
+        cuts.append(f)
+    return cuts
 
 
 def _device() -> str:
@@ -129,7 +137,7 @@ def track(work: Path, models_dir: Path) -> Tracks:
     else:
         cuts = detect_cuts(video, facts.fps, SCENE_THRESHOLD)
         cuts_path.write_text(json.dumps({"scene_threshold": SCENE_THRESHOLD, "cuts": cuts}, indent=2) + "\n", encoding="utf-8")
-    cuts = read_cuts(work)
+    cuts = read_cuts(work, facts.frameCount)
     print(f"cuts at frames {cuts}")
 
     models_dir.mkdir(parents=True, exist_ok=True)

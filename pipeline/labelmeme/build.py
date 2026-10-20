@@ -97,7 +97,7 @@ def write_built_sheet(video: Path, template: WireTemplate, out: Path) -> None:
 
 def build(work: Path, templates_dir: Path, params: ShapeParams) -> WireTemplate:
     facts = read_facts(work)
-    cuts = read_cuts(work)
+    cuts = read_cuts(work, facts.frameCount)
     tracks = load_tracks(work / "tracks.json")
     specs = parse_subjects(json.loads((work / "subjects.json").read_text(encoding="utf-8")), set(tracks))
 

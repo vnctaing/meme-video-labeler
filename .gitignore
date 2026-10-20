@@ -8,7 +8,5 @@ __pycache__/
 web/node_modules
 web/dist
 pipeline/.venv
-pipeline/work/*/*
-!pipeline/work/*/subjects.json
-!pipeline/work/*/cuts.json
+pipeline/work/
 pipeline/models/

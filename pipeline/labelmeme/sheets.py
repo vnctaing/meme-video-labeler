@@ -31,13 +31,6 @@ def read_frames(video: Path, wanted: Iterable[int]) -> dict[int, np.ndarray]:
     return frames
 
 
-def crop(frame: np.ndarray, box: Sequence[int], pad: float = 0.2) -> np.ndarray:
-    x, y, w, h = box
-    fh, fw = frame.shape[:2]
-    px, py = round(w * pad), round(h * pad)
-    return frame[max(0, y - py) : min(fh, y + h + py), max(0, x - px) : min(fw, x + w + px)]
-
-
 def tile(image: np.ndarray, caption: str, cell_w: int, cell_h: int) -> np.ndarray:
     out = np.full((cell_h + CAPTION_H, cell_w, 3), BACKGROUND, dtype=np.uint8)
     ih, iw = image.shape[:2]

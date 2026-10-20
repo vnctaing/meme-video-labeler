@@ -1,17 +1,6 @@
-from labelmeme.shaping import Run, ShapeParams, drop_short_runs, merge_tracks, runs_from_frames, shape_subject, smooth_run
+from labelmeme.shaping import Run, ShapeParams, drop_short_runs, runs_from_frames, shape_subject, smooth_run
 
 BOX = (100.0, 50.0, 40.0, 80.0)
-
-
-def test_merge_keeps_the_larger_box_on_overlap_and_reports_the_frames() -> None:
-    small = {0: (0.0, 0.0, 10.0, 10.0), 1: (0.0, 0.0, 10.0, 10.0)}
-    large = {1: (5.0, 5.0, 30.0, 30.0), 2: (5.0, 5.0, 30.0, 30.0)}
-
-    merged, overlaps = merge_tracks([small, large])
-
-    assert merged == {0: (0.0, 0.0, 10.0, 10.0), 1: (5.0, 5.0, 30.0, 30.0), 2: (5.0, 5.0, 30.0, 30.0)}
-    assert overlaps == [1]
-    assert merge_tracks([large, small])[0] == merged
 
 
 def test_gap_inside_a_shot_is_interpolated_linearly() -> None:
@@ -67,7 +56,7 @@ def test_shaped_runs_keep_their_length_and_stay_inside_the_frame() -> None:
     jitter = [(-6.0, -3.0, 60.0, 50.0), (-2.0, -1.0, 60.0, 50.0)] * 3 + [(150.0, 60.0, 70.0, 50.0), (146.0, 58.0, 70.0, 50.0)] * 3
     track = {20 + i: box for i, box in enumerate(jitter)}
 
-    runs, _ = shape_subject([track], cuts=[], width=width, height=height, params=ShapeParams())
+    runs = shape_subject(track, cuts=[], width=width, height=height, params=ShapeParams())
 
     assert [(r["from"], len(r["boxes"])) for r in runs] == [(20, 12)]
     for x, y, w, h in runs[0]["boxes"]:
@@ -75,12 +64,9 @@ def test_shaped_runs_keep_their_length_and_stay_inside_the_frame() -> None:
         assert x >= 0 and y >= 0 and w >= 1 and h >= 1 and x + w <= width and y + h <= height
 
 
-def test_shape_subject_bridges_a_flicker_and_drops_a_blip_across_a_cut() -> None:
-    before = {f: BOX for f in range(0, 30) if f not in (12, 13)}
-    after_blip = {f: BOX for f in range(30, 33)}
-    after = {f: BOX for f in range(50, 70)}
+def test_shape_subject_bridges_a_flicker_and_keeps_a_short_run_after_a_cut() -> None:
+    track = {f: BOX for f in range(0, 30) if f not in (12, 13)} | {f: BOX for f in range(30, 33)} | {f: BOX for f in range(50, 70)}
 
-    runs, overlaps = shape_subject([before, after_blip, after], cuts=[30], width=640, height=360, params=ShapeParams())
+    runs = shape_subject(track, cuts=[30], width=640, height=360, params=ShapeParams())
 
-    assert overlaps == []
-    assert [(r["from"], len(r["boxes"])) for r in runs] == [(0, 30), (50, 20)]
+    assert [(r["from"], len(r["boxes"])) for r in runs] == [(0, 30), (30, 3), (50, 20)]

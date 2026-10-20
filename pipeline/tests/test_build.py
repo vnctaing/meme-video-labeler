@@ -1,44 +1,53 @@
 import json
+import shutil
 from pathlib import Path
 
-import pytest
+from labelmeme.authoring import Authoring, dump_authoring
+from labelmeme.build import build
+from labelmeme.plan import HiddenKey, PointKey, Subject, Tracked
+from labelmeme.schema import validate_template
+from labelmeme.shaping import ShapeParams
 
-from labelmeme.build import parse_subjects
-from labelmeme.track import tracks_id, write_subjects_stub
-
-TRACKS = b'{"s1-1":[{"frame":0,"box":[1,1,2,2],"conf":0.9}],"s2-1":[{"frame":30,"box":[1,1,2,2],"conf":0.9}]}\n'
-
-
-def _subjects(tid: str | None) -> dict[str, object]:
-    raw: dict[str, object] = {"subjects": [{"id": "thom", "name": "Thom", "tracks": ["s1-1", "s2-1"]}]}
-    if tid is not None:
-        raw["tracksId"] = tid
-    return raw
+FIXTURE = Path(__file__).resolve().parents[2] / "web/public/templates/fixture"
+BOX = (100, 50, 40, 80)
 
 
-def test_tracks_id_changes_when_the_cuts_or_the_tracks_change() -> None:
-    base = tracks_id([24], TRACKS)
-    assert tracks_id([24], TRACKS) == base
-    assert tracks_id([20], TRACKS) != base
-    assert tracks_id([24], TRACKS.replace(b"s2-1", b"s2-2")) != base
+def _work(tmp_path: Path, authoring: Authoring) -> Path:
+    work = tmp_path / "work/built"
+    work.mkdir(parents=True)
+    shutil.copyfile(FIXTURE / "video.mp4", work / "video.mp4")
+    shutil.copyfile(FIXTURE / "thumb.jpg", work / "thumb.jpg")
+    (work / "SOURCE.md").write_text("# built\n")
+    facts = {"id": "built", "title": "Prep title", "credit": "c", "width": 640, "height": 360, "fps": 24, "frameCount": 48}
+    (work / "video.json").write_text(json.dumps(facts))
+    (work / "cuts.json").write_text(json.dumps({"cuts": [{"frame": 24}]}))
+    (work / "authoring.json").write_text(dump_authoring(authoring))
+    return work
 
 
-def test_the_stub_track_writes_is_accepted_by_build(tmp_path: Path) -> None:
-    tid = tracks_id([24], TRACKS)
-    write_subjects_stub(tmp_path / "subjects.json", ["s1-1", "s2-1"], tid)
-    stub = json.loads((tmp_path / "subjects.json").read_text())
-    assert stub["tracksId"] == tid
-    stub["subjects"] = [{"id": "thom", "name": "Thom", "tracks": ["s1-1", "s2-1"]}]
-    assert [s.id for s in parse_subjects(stub, {"s1-1", "s2-1"}, tid)] == ["thom"]
+def _tracked(start: int, stop: int) -> Tracked:
+    return Tracked(start, tuple(BOX for _ in range(start, stop)))
 
 
-def test_refuses_subjects_written_for_other_tracks() -> None:
-    old, new = tracks_id([24], TRACKS), tracks_id([20], TRACKS)
-    with pytest.raises(ValueError, match=rf'subjects\.json: written for tracksId "{old}", but cuts\.json and tracks\.json now give "{new}"'):
-        parse_subjects(_subjects(old), {"s1-1", "s2-1"}, new)
+def test_build_writes_the_tracked_segments_and_nothing_after_a_hide(tmp_path: Path) -> None:
+    thom = Subject("s1", "Thom", "#f5b800", (PointKey(4, (120, 90)), HiddenKey(16), PointKey(30, (110, 80))))
+    nobody = Subject("s2", "", "#2f7df6", ())
+    authoring = Authoring(3, "Edited title", (thom, nobody), {
+        "lead|0-4|4@120,90": _tracked(0, 4),
+        "tail|4-16|4@120,90": _tracked(4, 16),
+        "tail|30-48|30@110,80": _tracked(30, 48),
+        "tail|4-24|4@120,90": _tracked(4, 24),
+    })
 
+    template = build(_work(tmp_path, authoring), tmp_path / "templates", ShapeParams())
 
-def test_refuses_subjects_without_a_tracks_id() -> None:
-    tid = tracks_id([24], TRACKS)
-    with pytest.raises(ValueError, match=rf'subjects\.json: no "tracksId" field.*"tracksId": "{tid}"'):
-        parse_subjects(_subjects(None), {"s1-1", "s2-1"}, tid)
+    validate_template(template)
+    assert template["title"] == "Edited title"
+    assert template["cuts"] == [24]
+    assert [s["id"] for s in template["subjects"]] == ["s1"]
+    runs = template["subjects"][0]["runs"]
+    assert [(r["from"], r["from"] + len(r["boxes"])) for r in runs] == [(0, 16), (30, 48)]
+    written = json.loads((tmp_path / "templates/built/template.json").read_text())
+    assert written == template
+    index = json.loads((tmp_path / "templates/index.json").read_text())
+    assert [(t["id"], t["subjectCount"]) for t in index["templates"]] == [("built", 1)]

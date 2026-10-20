@@ -3,7 +3,6 @@ from __future__ import annotations
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
 
 from labelmeme.schema import WireRun
 
@@ -24,35 +23,8 @@ class Run:
 @dataclass(frozen=True, slots=True)
 class ShapeParams:
     max_gap: int = 6
-    min_run: int = 8
+    min_run: int = 1
     smooth_window: int = 5
-
-
-def _area(box: Box) -> float:
-    return box[2] * box[3]
-
-
-class Merged(NamedTuple):
-    frames: dict[int, Box]
-    overlaps: list[int]
-
-
-class Shaped(NamedTuple):
-    runs: list[WireRun]
-    overlaps: list[int]
-
-
-def merge_tracks(tracks: Sequence[Track]) -> Merged:
-    merged: dict[int, Box] = {}
-    overlaps: set[int] = set()
-    for track in tracks:
-        for frame, box in track.items():
-            if frame in merged:
-                overlaps.add(frame)
-                if _area(box) <= _area(merged[frame]):
-                    continue
-            merged[frame] = box
-    return Merged(dict(sorted(merged.items())), sorted(overlaps))
 
 
 def _lerp(a: Box, b: Box, t: float) -> Box:
@@ -110,9 +82,6 @@ def to_wire_run(run: Run, width: int, height: int) -> WireRun:
     return {"from": run.start, "boxes": boxes}
 
 
-def shape_subject(
-    tracks: Sequence[Track], cuts: Sequence[int], width: int, height: int, params: ShapeParams
-) -> Shaped:
-    frames, overlaps = merge_tracks(tracks)
-    runs = drop_short_runs(runs_from_frames(frames, cuts, params.max_gap), params.min_run)
-    return Shaped([to_wire_run(smooth_run(run, params.smooth_window), width, height) for run in runs], overlaps)
+def shape_subject(track: Track, cuts: Sequence[int], width: int, height: int, params: ShapeParams) -> list[WireRun]:
+    runs = drop_short_runs(runs_from_frames(track, cuts, params.max_gap), params.min_run)
+    return [to_wire_run(smooth_run(run, params.smooth_window), width, height) for run in runs]

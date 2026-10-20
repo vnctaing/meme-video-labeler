@@ -14,6 +14,11 @@ type ExportState =
 
 type SupportState = { kind: "checking" } | ({ kind: "checked" } & ExportSupport);
 
+interface View {
+  readonly nodes: readonly Node[];
+  readonly teardown: () => void;
+}
+
 const BASE_URL = new URL(import.meta.env.BASE_URL, location.href).href;
 
 function parseRoute(hash: string): Route {
@@ -50,16 +55,25 @@ function galleryCard(t: IndexEntry): HTMLElement {
   );
 }
 
-async function renderGallery(root: HTMLElement): Promise<() => void> {
+async function galleryView(): Promise<View> {
   const templates = await loadIndex(BASE_URL);
-  root.replaceChildren(
-    el("header", {}, el("h1", {}, "labelmeme"), el("p", { className: "tagline" }, "Pick a clip, name the people, download the meme.")),
-    el("main", { className: "gallery" }, ...templates.map(galleryCard)),
-  );
-  return () => {};
+  return {
+    nodes: [
+      el("header", {}, el("h1", {}, "labelmeme"), el("p", { className: "tagline" }, "Pick a clip, name the people, download the meme.")),
+      el("main", { className: "gallery" }, ...templates.map(galleryCard)),
+    ],
+    teardown: () => {},
+  };
 }
 
-async function renderEditor(root: HTMLElement, id: string): Promise<() => void> {
+function errorView(e: unknown): View {
+  return {
+    nodes: [el("main", { className: "error" }, el("p", {}, e instanceof Error ? e.message : String(e)), el("a", { href: "#/" }, "Back to all clips"))],
+    teardown: () => {},
+  };
+}
+
+async function editorView(id: string): Promise<View> {
   const [template] = await Promise.all([loadTemplate(id, BASE_URL), loadLabelFont(BASE_URL)]);
   const labels = new Map<SubjectId, string>();
   const abort = new AbortController();
@@ -118,7 +132,7 @@ async function renderEditor(root: HTMLElement, id: string): Promise<() => void> 
     }
   });
 
-  root.replaceChildren(
+  const nodes = [
     el("header", {}, el("a", { className: "back", href: "#/" }, "← All clips"), el("h1", {}, template.title), el("p", { className: "credit" }, template.credit)),
     el(
       "main",
@@ -127,7 +141,7 @@ async function renderEditor(root: HTMLElement, id: string): Promise<() => void> 
       el("section", { className: "labels" }, ...inputs),
       el("section", { className: "export" }, downloadButton, progress, status),
     ),
-  );
+  ];
   renderExport();
 
   void import("./export.ts")
@@ -138,10 +152,13 @@ async function renderEditor(root: HTMLElement, id: string): Promise<() => void> 
       renderExport();
     });
 
-  return () => {
-    abort.abort();
-    setExportState({ kind: "idle" });
-    preview.destroy();
+  return {
+    nodes,
+    teardown: () => {
+      abort.abort();
+      setExportState({ kind: "idle" });
+      preview.destroy();
+    },
   };
 }
 
@@ -165,17 +182,19 @@ function statusText(state: ExportState, support: SupportState): string {
 
 async function start(root: HTMLElement) {
   let teardown: () => void = () => {};
+  let latest = 0;
   const render = async () => {
+    const token = ++latest;
     teardown();
     teardown = () => {};
     const route = parseRoute(location.hash);
-    try {
-      teardown = route.kind === "gallery" ? await renderGallery(root) : await renderEditor(root, route.id);
-    } catch (e) {
-      root.replaceChildren(
-        el("main", { className: "error" }, el("p", {}, e instanceof Error ? e.message : String(e)), el("a", { href: "#/" }, "Back to all clips")),
-      );
+    const view = await (route.kind === "gallery" ? galleryView() : editorView(route.id)).catch(errorView);
+    if (token !== latest) {
+      view.teardown();
+      return;
     }
+    root.replaceChildren(...view.nodes);
+    teardown = view.teardown;
   };
   window.addEventListener("hashchange", () => void render());
   await render();

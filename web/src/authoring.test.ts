@@ -1,6 +1,17 @@
-import { describe, expect, test } from "vitest";
-import { type Person, type TrackId, ignored, moveTrack, parseJob, parsePeople, renamePerson } from "./authoring.ts";
-import { TemplateError } from "./template.ts";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import {
+  ApiError,
+  type Person,
+  ServerNotAnswering,
+  type TrackId,
+  getJob,
+  ignored,
+  moveTrack,
+  parseJob,
+  parsePeople,
+  renamePerson,
+} from "./authoring.ts";
+import { TemplateError, type TemplateId } from "./template.ts";
 
 const SOURCE = {
   videoId: "R6MlUcmOul8",
@@ -120,5 +131,31 @@ describe("moveTrack", () => {
 
   test("renamePerson changes one name", () => {
     expect(renamePerson(board, 1, "Ada").map((p) => p.name)).toEqual(["Thom", "Ada"]);
+  });
+});
+
+describe("getJob when the request fails", () => {
+  const LAB = "tos-lab" as TemplateId;
+  afterEach(() => vi.unstubAllGlobals());
+  const respond = (status: number, body: string) => vi.stubGlobal("fetch", async () => new Response(body, { status }));
+
+  test.each([502, 503, 504])("HTTP %i from the dev proxy means the server is not answering", async (status) => {
+    respond(status, "");
+    await expect(getJob(LAB)).rejects.toBeInstanceOf(ServerNotAnswering);
+  });
+
+  test("a refused connection means the server is not answering", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    await expect(getJob(LAB)).rejects.toBeInstanceOf(ServerNotAnswering);
+  });
+
+  test.each([404, 500])("HTTP %i from the server is an API error with its message", async (status) => {
+    respond(status, JSON.stringify({ error: "no job named 'tos-lab'", field: null }));
+    const failure = getJob(LAB);
+    await expect(failure).rejects.toBeInstanceOf(ApiError);
+    await expect(failure).rejects.not.toBeInstanceOf(ServerNotAnswering);
+    await expect(failure).rejects.toThrow("no job named 'tos-lab'");
   });
 });

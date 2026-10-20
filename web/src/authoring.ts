@@ -80,6 +80,13 @@ export interface People {
   readonly issues: readonly Issue[];
 }
 
+export class ServerNotAnswering extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ServerNotAnswering";
+  }
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly field: string | null;
@@ -249,12 +256,17 @@ export function renamePerson(people: readonly Person[], index: number, name: str
   return people.map((p, i) => (i === index ? { name, tracks: p.tracks } : p));
 }
 
+const PROXY_UPSTREAM_DOWN = new Set([502, 503, 504]);
+
 async function request(method: string, url: string, body?: unknown): Promise<unknown> {
   const res = await fetch(url, {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
+  }).catch((e: unknown) => {
+    throw new ServerNotAnswering(`${method} ${url}: ${e instanceof Error ? e.message : String(e)}`);
   });
+  if (PROXY_UPSTREAM_DOWN.has(res.status)) throw new ServerNotAnswering(`${method} ${url} failed with HTTP ${res.status}`);
   const json: unknown = await res.json().catch(() => null);
   if (!res.ok) {
     const o = isRecord(json) ? json : {};

@@ -8,6 +8,7 @@ import {
   type People,
   type Person,
   type Running,
+  ServerNotAnswering,
   type SourceFacts,
   type TrackCard,
   type TrackId,
@@ -92,7 +93,10 @@ export async function newView(): Promise<View> {
 }
 
 export async function jobView(id: TemplateId): Promise<View> {
-  let job = await getJob(id);
+  let job: Job | null = await getJob(id).catch((e: unknown) => {
+    if (e instanceof ServerNotAnswering) return null;
+    throw e;
+  });
   let alive = true;
   let timer = 0;
   let teardownPanel: () => void = () => {};
@@ -100,14 +104,14 @@ export async function jobView(id: TemplateId): Promise<View> {
   const panel = el("main", { className: "author" });
 
   const show = (next: Job) => {
-    const previous = job.state.kind;
+    const previous = job?.state.kind;
     job = next;
     if (previous === "building" && next.state.kind === "ready") {
       location.hash = `#/t/${id}`;
       return;
     }
     teardownPanel();
-    const built = stepPanel(job, show);
+    const built = stepPanel(next, show);
     teardownPanel = built.teardown;
     panel.replaceChildren(built.node);
     schedule();
@@ -115,12 +119,12 @@ export async function jobView(id: TemplateId): Promise<View> {
 
   const schedule = () => {
     clearTimeout(timer);
-    if (!alive || !isRunning(job.state)) return;
+    if (!alive || (job !== null && !isRunning(job.state))) return;
     timer = window.setTimeout(async () => {
       try {
         const next = await getJob(id);
         if (!alive) return;
-        if (next.state.kind !== job.state.kind) show(next);
+        if (job === null || next.state.kind !== job.state.kind) show(next);
         else {
           job = next;
           updateProgress(panel, next);
@@ -135,7 +139,10 @@ export async function jobView(id: TemplateId): Promise<View> {
     }, POLL_MS);
   };
 
-  show(job);
+  if (job === null) {
+    panel.replaceChildren(el("section", { className: "progress-panel" }, el("p", { className: "progress-text", role: "status" }, progressText(null))));
+    schedule();
+  } else show(job);
   return {
     nodes: [el("header", {}, el("a", { className: "back", href: "#/new" }, "← New template"), title), panel],
     teardown: () => {

@@ -129,10 +129,13 @@ async function renderEditor(root: HTMLElement, id: string): Promise<() => void> 
   );
   renderExport();
 
-  void import("./export.ts").then(({ canExportHere }) => canExportHere(template)).then((result) => {
-    support = { kind: "checked", ...result };
-    renderExport();
-  });
+  void import("./export.ts")
+    .then(({ canExportHere }) => canExportHere(template))
+    .catch((e: unknown): ExportSupport => ({ ok: false, reason: `Export is unavailable: ${e instanceof Error ? e.message : String(e)}` }))
+    .then((result) => {
+      support = { kind: "checked", ...result };
+      renderExport();
+    });
 
   return () => {
     abort.abort();

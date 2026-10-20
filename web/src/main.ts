@@ -108,6 +108,7 @@ async function renderEditor(root: HTMLElement, id: string): Promise<() => void> 
         },
         abort.signal,
       );
+      if (abort.signal.aborted) return;
       const filename = `labelmeme-${template.id}.mp4`;
       const url = URL.createObjectURL(blob);
       setExportState({ kind: "done", url, filename });

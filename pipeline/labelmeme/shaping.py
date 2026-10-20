@@ -31,13 +31,13 @@ def _lerp(a: Box, b: Box, t: float) -> Box:
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t)
 
 
-def runs_from_frames(frames: Track, cuts: Sequence[int], max_gap: int) -> list[Run]:
+def runs_from_frames(frames: Track, breaks: Sequence[int], max_gap: int) -> list[Run]:
     runs: list[Run] = []
     start, boxes, prev = -1, list[Box](), -1
     for frame in sorted(frames):
         box = frames[frame]
-        same_shot = bisect_right(cuts, frame) == bisect_right(cuts, prev)
-        if boxes and same_shot and frame - prev - 1 <= max_gap:
+        unbroken = bisect_right(breaks, frame) == bisect_right(breaks, prev)
+        if boxes and unbroken and frame - prev - 1 <= max_gap:
             last, span = boxes[-1], frame - prev
             boxes.extend(_lerp(last, box, i / span) for i in range(1, span))
         else:
@@ -82,6 +82,6 @@ def to_wire_run(run: Run, width: int, height: int) -> WireRun:
     return {"from": run.start, "boxes": boxes}
 
 
-def shape_subject(track: Track, cuts: Sequence[int], width: int, height: int, params: ShapeParams) -> list[WireRun]:
-    runs = drop_short_runs(runs_from_frames(track, cuts, params.max_gap), params.min_run)
+def shape_subject(track: Track, breaks: Sequence[int], width: int, height: int, params: ShapeParams) -> list[WireRun]:
+    runs = drop_short_runs(runs_from_frames(track, breaks, params.max_gap), params.min_run)
     return [to_wire_run(smooth_run(run, params.smooth_window), width, height) for run in runs]

@@ -60,7 +60,7 @@ def build(work: Path, templates_dir: Path, params: ShapeParams) -> WireTemplate:
     subjects: list[WireSubject] = []
     for s in a.subjects:
         frames = plan.boxes_by_frame(plan.plan_subject(s.keyframes, clip.cuts, clip.frame_count), a.segments)
-        runs = shape_subject(frames, clip.cuts, clip.width, clip.height, params)
+        runs = shape_subject(frames, plan.breaks(s.keyframes, clip.cuts), clip.width, clip.height, params)
         if runs:
             subjects.append({"id": s.id, "name": s.name, "runs": runs})
 

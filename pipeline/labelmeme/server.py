@@ -129,7 +129,7 @@ def create_app(paths: Paths, web_port: int, tracker: SegmentTracker | None = Non
             segments = plan.plan_subject(s.keyframes, clip.cuts, clip.frame_count)
             frames = plan.boxes_by_frame(segments, a.segments)
             tracks[s.id] = {
-                "runs": shape_subject(frames, clip.cuts, clip.width, clip.height, ShapeParams()),
+                "runs": shape_subject(frames, plan.breaks(s.keyframes, clip.cuts), clip.width, clip.height, ShapeParams()),
                 "segments": [segment_out(seg) for seg in segments],
             }
         return {

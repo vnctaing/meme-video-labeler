@@ -81,6 +81,10 @@ def plan_subject(keyframes: Sequence[Keyframe], cuts: Sequence[int], frame_count
     return segments
 
 
+def breaks(keyframes: Sequence[Keyframe], cuts: Sequence[int]) -> list[int]:
+    return sorted({*cuts, *(k.frame for k in keyframes if isinstance(k, HiddenKey))})
+
+
 def plan(subjects: Sequence[Subject], cuts: Sequence[int], frame_count: int) -> list[tuple[str, Segment]]:
     return [(s.id, seg) for s in subjects for seg in plan_subject(s.keyframes, cuts, frame_count)]
 

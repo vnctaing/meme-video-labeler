@@ -51,3 +51,17 @@ def test_build_writes_the_tracked_segments_and_nothing_after_a_hide(tmp_path: Pa
     assert written == template
     index = json.loads((tmp_path / "templates/index.json").read_text())
     assert [(t["id"], t["subjectCount"]) for t in index["templates"]] == [("built", 1)]
+
+
+def test_a_hide_shorter_than_the_gap_fill_still_breaks_the_run(tmp_path: Path) -> None:
+    thom = Subject("s1", "Thom", "#f5b800", (PointKey(2, (120, 90)), HiddenKey(10), PointKey(14, (110, 80))))
+    authoring = Authoring(1, "T", (thom,), {
+        "lead|0-2|2@120,90": _tracked(0, 2),
+        "tail|2-10|2@120,90": _tracked(2, 10),
+        "tail|14-24|14@110,80": _tracked(14, 24),
+    })
+
+    template = build(_work(tmp_path, authoring), tmp_path / "templates", ShapeParams())
+
+    runs = template["subjects"][0]["runs"]
+    assert [(r["from"], r["from"] + len(r["boxes"])) for r in runs] == [(0, 10), (14, 24)]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import threading
@@ -338,6 +339,8 @@ def derive_id(title: str, taken: set[str]) -> str:
     return job_id
 
 
+log = logging.getLogger(__name__)
+
 OnRunning = Callable[[Job, bool], None]
 
 
@@ -378,8 +381,13 @@ class Jobs:
         return self._load(job_id)
 
     def list(self) -> list[Job]:
-        ids = [p.parent.name for p in self._work_dir.glob("*/job.json")]
-        return sorted((self._load(i) for i in ids), key=lambda j: j.created_at, reverse=True)
+        jobs = []
+        for path in self._work_dir.glob("*/job.json"):
+            try:
+                jobs.append(self._load(path.parent.name))
+            except ValueError as e:
+                log.warning("skipping a job that cannot be read: %s", e)
+        return sorted(jobs, key=lambda j: j.created_at, reverse=True)
 
     def transition(self, job_id: str, event: Event) -> Job:
         with self._lock:

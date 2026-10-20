@@ -182,6 +182,22 @@ def test_recover_enqueues_running_jobs_oldest_first(tmp_path: Path) -> None:
     assert {j.id for j in restarted.list()} == {"a", "b", "c"}
 
 
+@pytest.mark.parametrize("broken", ['{"version": 2}', "{", "\xff"])
+def test_a_broken_job_json_is_skipped_by_list_and_recover(tmp_path: Path, broken: str, caplog: pytest.LogCaptureFixture) -> None:
+    jobs, _ = _store(tmp_path)
+    jobs.create("a", SOURCE)
+    jobs.create("b", SOURCE)
+    jobs.transition("b", StepDone())
+    (tmp_path / "work/broken").mkdir()
+    (tmp_path / "work/broken/job.json").write_text(broken, encoding="latin-1")
+
+    restarted, enqueued = _store(tmp_path)
+    assert [j.id for j in restarted.recover()] == ["a"]
+    assert enqueued == [("a", True)]
+    assert {j.id for j in restarted.list()} == {"a", "b"}
+    assert "work/broken/job.json" in caplog.text
+
+
 def test_with_settled_holds_only_in_the_named_states(tmp_path: Path) -> None:
     jobs, _ = _store(tmp_path)
     jobs.create("a", SOURCE)

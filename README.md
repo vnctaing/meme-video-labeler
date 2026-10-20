@@ -15,6 +15,7 @@ Other commands, run from `web/`:
 | `npm run build` | Type-checks the app, the tests and the configs, then writes the production build to `dist/`. |
 | `npm test` | Runs the vitest unit tests in `src/*.test.ts`. |
 | `npm run e2e` | Builds, serves `dist/` with `vite preview` on port 4173, and runs the Playwright specs in `e2e/`. |
+| `npm run dev:author` | Starts the authoring API on port 8787 and Vite on port 5174 with the **New template** page turned on. See [Author a template from a YouTube link](#author-a-template-from-a-youtube-link). |
 
 The e2e specs need `ffmpeg` and `ffprobe` on the `PATH`. For every template in `index.json`, they label each person, play the clip, export it, and check the MP4. They write `gallery.png`, and for each template `<id>-editor.png`, `<id>-export.mp4` and a `<id>/` proof directory, to `web/test-results/`.
 
@@ -52,6 +53,68 @@ cd pipeline && uv run python -m labelmeme fixture
 ```
 
 The command is idempotent. A second run writes the same bytes.
+
+## Author a template from a YouTube link
+
+The **New template** page turns a YouTube link into a template in the gallery without a terminal. It runs the same `prep`, `track` and `build` code as the CLI, through a small API in `pipeline/labelmeme/server.py`. It is a local tool for the person who runs the app. Production builds, `npm run dev` and `vite preview` do not include it.
+
+### Run it
+
+You need everything that [Run the pipeline](#run-the-pipeline) needs, plus `node_modules` in `web/`.
+
+```sh
+cd web && npm run dev:author
+```
+
+The command starts two processes and stops both when either one exits or you press Ctrl-C:
+
+- `uv run python -m labelmeme serve --port 8787`, the API. It listens on 127.0.0.1 only and refuses requests whose `Origin` is not the authoring page.
+- `vite --port 5174 --strictPort` with `VITE_AUTHOR=1`. Vite forwards `/api` to the API. Port 5174 leaves a plain `npm run dev` on 5173 alone.
+
+Open http://localhost:5174/ and click **New template**.
+
+1. Paste a YouTube link and, if you want a shorter id than the one derived from the video title, a short name. The API checks the video before it creates a job, so a bad link, a private video or an unavailable video shows an error under the field. The download keeps the best H.264 stream at 720p or below in `pipeline/work/.sources/<video id>/source.mp4`. A second job from the same video downloads nothing.
+2. Choose the start and end of the clip, at most 30 s. The title, credit and license fields start from the video title, the channel, and `unknown, personal use`.
+3. Wait for tracking. The page shows the frame count as YOLO works through the clip.
+4. Group the tracks into people. Each row is one person with a name, a timeline of its tracks with the cuts marked, and one card per track with 8 crops. Use **Move to** on a card to add a track to a person, start a new person, or ignore it. To label one person across a cut or seen from behind, move all of their tracks into one row. The page saves every change to `pipeline/work/<id>/subjects.json`. **Build template** stays disabled until every person has a name.
+5. Click **Build template**. When the template is written, the page opens it in the editor, and the gallery lists it.
+
+The People step suggests groups only inside one shot, where one track ends and another starts next to it within half a second. That catches a tracker that changed ids on one person. It never links tracks across a cut. Check every suggestion against the crops.
+
+### Job states
+
+Each job lives in `pipeline/work/<id>/job.json`, and `<id>` is also the template id. A job is always in exactly one state.
+
+| State | Meaning | What you can do |
+| --- | --- | --- |
+| `downloading` | The worker is downloading the video. | Wait. |
+| `downloaded` | The video is in the source cache. | Choose the clip. |
+| `tracking` | The worker is running `prep`, `track` and the group suggestion. | Wait. |
+| `tracked` | Tracks and crop sheets exist. `subjects.json` holds the People draft. | Group and name people, build, or choose another clip. |
+| `building` | The worker is running `build`. | Wait. |
+| `ready` | The template is in `web/public/templates/<id>/` and in `index.json`. | Open it, regroup people, or choose another clip. |
+| `failed` | A step failed. The page shows the step and the error. | Retry the step. After a failed track or build, you can also choose another clip. After a failed build, you can go back to the people. |
+
+One worker thread runs one step at a time for all jobs, because one tracking run already fills the GPU. A job that waits for another shows "Waiting for another job to finish".
+
+When the API stops in the middle of a step, the job file still names that step. The next `npm run dev:author` runs the step again from its start and the page says so. Tracking a 15 s clip takes about 75 s on an Apple silicon Mac, and a restart repeats all of it. A rerun of a step gives the same result as a first run. The download continues its partial files. Tracking deletes the clip's outputs in `pipeline/work/<id>/` and starts again. Build overwrites the template.
+
+A new clip replaces the job's `cuts.json`, `tracks.json` and `subjects.json`. To edit `cuts.json` by hand, finish the job in the UI, then use the CLI steps in the next section on the same `<id>`.
+
+### Check the whole flow
+
+`web/e2e/author-flow.mjs` drives the page in Chromium with Playwright. It pastes the Tears of Steel link, downloads it, chooses 225.1 s to 240.1 s, kills the API with `kill -9` during tracking, starts `npm run dev:author` again, groups the tracks into three people, builds the template, labels it in the editor, and exports the MP4. `npm run e2e` does not run it, because it needs the network and takes about 3 minutes. Ports 8787 and 5174 must be free.
+
+```sh
+cd web && node e2e/author-flow.mjs ../proof/authoring
+node e2e/proof.mjs ../proof/authoring/labelmeme-tos-lab-ui.mp4 public/templates/tos-lab-ui ../proof/authoring
+```
+
+The script writes a screenshot of each step and the exported MP4 to the directory you give it. It writes the template `tos-lab-ui` into `web/public/templates/` and `index.json`. Delete `web/public/templates/tos-lab-ui/` and `pipeline/work/tos-lab-ui/`, and restore `index.json` with `git checkout`, before you run `npm run e2e`, which needs a label for every subject in `index.json`.
+
+### Rights of YouTube clips
+
+A template made from a YouTube clip carries the rights of that clip. The page sets its license to `unknown, personal use` unless you change it, and `SOURCE.md` records the video URL, the license and the credit. Do not publish such a template unless you know that the clip's license allows it. The Tears of Steel clips in this repository are CC-BY 3.0, (c) Blender Foundation.
 
 ## Author a template from a real clip
 

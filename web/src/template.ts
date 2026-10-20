@@ -62,32 +62,32 @@ export class TemplateError extends Error {
 
 const SLUG = /^[a-z0-9-]+$/;
 
-function isRecord(v: unknown): v is Record<string, unknown> {
+export function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-function record(v: unknown, path: string): Record<string, unknown> {
+export function record(v: unknown, path: string): Record<string, unknown> {
   if (!isRecord(v)) throw new TemplateError(path, "expected an object");
   return v;
 }
 
-function array(v: unknown, path: string): readonly unknown[] {
+export function array(v: unknown, path: string): readonly unknown[] {
   if (!Array.isArray(v)) throw new TemplateError(path, "expected an array");
   return v;
 }
 
-function string(v: unknown, path: string): string {
+export function string(v: unknown, path: string): string {
   if (typeof v !== "string") throw new TemplateError(path, "expected a string");
   return v;
 }
 
-function slug(v: unknown, path: string): string {
+export function slug(v: unknown, path: string): string {
   const s = string(v, path);
   if (!SLUG.test(s)) throw new TemplateError(path, `expected a slug [a-z0-9-]+, got ${JSON.stringify(s)}`);
   return s;
 }
 
-function int(v: unknown, path: string, min: number): number {
+export function int(v: unknown, path: string, min: number): number {
   if (typeof v !== "number" || !Number.isInteger(v)) throw new TemplateError(path, "expected an integer");
   if (v < min) throw new TemplateError(path, `expected >= ${min}, got ${v}`);
   return v;

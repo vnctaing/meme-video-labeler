@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
@@ -75,7 +76,7 @@ def _device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def run_tracker(video: Path, cuts: list[int], model_path: Path) -> tuple[Tracks, int]:
+def run_tracker(video: Path, cuts: list[int], model_path: Path, on_frame: Callable[[int], None]) -> tuple[Tracks, int]:
     model = YOLO(str(model_path))
     device = _device()
     print(f"tracking on {device}")
@@ -106,6 +107,7 @@ def run_tracker(video: Path, cuts: list[int], model_path: Path) -> tuple[Tracks,
                         {"frame": frame_index, "box": box, "conf": round(float(conf), 3)}
                     )
             frame_index += 1
+            on_frame(frame_index)
     finally:
         cap.release()
     return {f"s{shot}-{n}": by_shot[(shot, n)] for shot, n in sorted(by_shot)}, frame_index
@@ -138,7 +140,7 @@ def write_track_sheets(video: Path, tracks: Tracks, sheets_dir: Path) -> None:
         sheets.write_jpg(sheets_dir / f"track_{tid}.jpg", sheets.grid(crops, cols=SHEET_SAMPLES))
 
 
-def track(work: Path, models_dir: Path) -> Tracks:
+def track(work: Path, models_dir: Path, on_frame: Callable[[int], None] = lambda _: None) -> Tracks:
     facts = read_facts(work)
     video = work / "video.mp4"
     cuts_path = work / "cuts.json"
@@ -151,7 +153,7 @@ def track(work: Path, models_dir: Path) -> Tracks:
     print(f"cuts at frames {cuts}")
 
     models_dir.mkdir(parents=True, exist_ok=True)
-    tracks, decoded = run_tracker(video, cuts, models_dir / MODEL)
+    tracks, decoded = run_tracker(video, cuts, models_dir / MODEL, on_frame)
     if decoded != facts.frameCount:
         raise ValueError(f"{video}: tracked {decoded} frames, video.json says {facts.frameCount}")
     tracks_json = (json.dumps(tracks, separators=(",", ":")) + "\n").encode()

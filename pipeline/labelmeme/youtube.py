@@ -16,7 +16,8 @@ FORMAT = "bv*[height<=720][vcodec^=avc1]+ba[ext=m4a]/b[height<=720][ext=mp4][vco
 
 KNOWN_ERRORS = (
     ("Private video", "This video is private."),
-    ("Video unavailable", "This video is unavailable."),
+    ("video unavailable", "This video is unavailable."),
+    ("video is unavailable", "This video is unavailable."),
     ("confirm your age", "This video is age-restricted, so it cannot be downloaded without signing in."),
     ("Requested format is not available", "This video has no H.264 version at 720p or below."),
 )
@@ -55,7 +56,7 @@ def parse_youtube_url(text: str) -> tuple[str, str]:
 
 def plain_error(message: str) -> str:
     for needle, plain in KNOWN_ERRORS:
-        if needle in message:
+        if needle.lower() in message.lower():
             return plain
     return "YouTube said: " + re.sub(r"^ERROR: (\[[^\]]+\] [^:]+: )?", "", message).strip()
 

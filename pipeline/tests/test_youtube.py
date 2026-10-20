@@ -49,6 +49,7 @@ def test_rejects_anything_else(text: str) -> None:
     [
         ("ERROR: [youtube] abcdefghijk: Private video. Sign in if you've been granted access", "This video is private."),
         ("ERROR: [youtube] abcdefghijk: Video unavailable. This video has been removed", "This video is unavailable."),
+        ("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable", "This video is unavailable."),
         ("ERROR: [youtube] abcdefghijk: Sign in to confirm your age.", "This video is age-restricted, so it cannot be downloaded without signing in."),
         ("ERROR: [youtube] abcdefghijk: Requested format is not available.", "This video has no H.264 version at 720p or below."),
         ("ERROR: [youtube] abcdefghijk: Something new broke", "YouTube said: Something new broke"),

@@ -57,7 +57,8 @@ def encode(src: Path, dst: Path, fps: int, start: float = 0.0, duration: float |
     if duration is not None:
         args += ["-t", f"{duration}"]
     args += [
-        "-vf", f"fps={fps}",
+        # A start between two source frames would otherwise put the first output frame after t=0.
+        "-vf", f"fps={fps}:start_time=0",
         "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p", "-bf", "0",
         "-video_track_timescale", str(fps * 1000),
         "-c:a", "aac", "-b:a", "128k",

@@ -53,6 +53,9 @@ def main() -> None:
     b = commands.add_parser("build", help="shape work/<id>/ tracks per subjects.json into web/public/templates/<id>/")
     b.add_argument("id", type=_slug)
 
+    s = commands.add_parser("serve", help="run the authoring API that `npm run dev:author` starts")
+    s.add_argument("--port", type=int, default=8787)
+
     args = parser.parse_args()
     match args.command:
         case "fixture":
@@ -68,6 +71,11 @@ def main() -> None:
             track(WORK_DIR / args.id, MODELS_DIR)
         case "build":
             build(WORK_DIR / args.id, TEMPLATES_DIR, ShapeParams())
+        case "serve":
+            from labelmeme.server import serve
+            from labelmeme.worker import Paths
+
+            serve(Paths(WORK_DIR, MODELS_DIR, TEMPLATES_DIR), args.port)
 
 
 if __name__ == "__main__":

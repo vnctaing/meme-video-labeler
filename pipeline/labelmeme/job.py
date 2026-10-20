@@ -163,6 +163,10 @@ class Conflict(Exception):
     pass
 
 
+class UnknownJob(KeyError):
+    pass
+
+
 def advance(state: State, event: Event) -> State:
     match state, event:
         case Downloading(source=s), StepDone():
@@ -341,7 +345,7 @@ class Jobs:
     def __init__(self, work_dir: Path, templates_dir: Path, on_running: OnRunning) -> None:
         self._work_dir = work_dir
         self._templates_dir = templates_dir
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._on_running = on_running
 
     def _path(self, job_id: str) -> Path:
@@ -350,7 +354,7 @@ class Jobs:
     def _load(self, job_id: str) -> Job:
         path = self._path(job_id)
         if SLUG.fullmatch(job_id) is None or not path.is_file():
-            raise KeyError(job_id)
+            raise UnknownJob(job_id)
         try:
             return parse_job(json.loads(path.read_text(encoding="utf-8")))
         except ValueError as e:

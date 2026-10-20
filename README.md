@@ -146,6 +146,7 @@ Each subject has an `id` (slug, unique within the template), a display `name`, a
 Invariants, enforced by `validate_template` before any write:
 
 - Runs of a subject are sorted by `from` and do not overlap.
+- Two runs of a subject touch only at a cut. Anywhere else at least one frame separates them, so a label never fades out and straight back in.
 - Every run lies inside `[0, frameCount)`.
 - No run crosses a cut. A run may start or end at a cut, so a subject visible on both sides of a cut has two runs.
 - Boxes are integer pixels in template coordinates with a top-left origin. `w` and `h` are at least 1, and the box lies inside the frame.

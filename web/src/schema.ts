@@ -9,7 +9,7 @@ export interface WireRun {
   boxes: WireBox[];
 }
 
-/** A person the user can label. */
+/** A person or thing the user can label. */
 export interface WireSubject {
   /** Slug matching `[a-z0-9-]+`, unique within the template. */
   id: string;
@@ -39,7 +39,7 @@ export interface WireTemplate {
   frameCount: number;
   /** Frames where a new shot starts: sorted, unique, each in (0, frameCount). */
   cuts: number[];
-  /** People that can be labelled. */
+  /** People and things that can be labelled. */
   subjects: WireSubject[];
 }
 

@@ -17,6 +17,7 @@ from labelmeme.schema import SLUG
 TRACKER_BUILD = "edgetam-7711e01-s2"
 COLOR = re.compile(r"#[0-9a-f]{6}")
 MAX_NAME = 60
+UNDO_CACHE_SEGMENTS = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +175,17 @@ def _nearest_edit_first(todo: tuple[str, Segment], subject: str, frame: int) -> 
     return subject_id != subject, min(abs(seg.start - frame), abs(seg.stop - 1 - frame))
 
 
+def _oldest_retired_first(segments: Mapping[str, Tracked], was: frozenset[str], keys: set[str]) -> list[str]:
+    retired_before = [k for k in segments if k not in was and k not in keys]
+    retired_now = [k for k in segments if k in was and k not in keys]
+    return retired_before + retired_now
+
+
+def _planned_plus_undo_cache(segments: Mapping[str, Tracked], was: frozenset[str], keys: set[str]) -> dict[str, Tracked]:
+    newest_retired = _oldest_retired_first(segments, was, keys)[-UNDO_CACHE_SEGMENTS:]
+    return {k: segments[k] for k in newest_retired} | {k: v for k, v in segments.items() if k in keys}
+
+
 class AuthoringStore:
     def __init__(self, work_dir: Path) -> None:
         self._work_dir = work_dir
@@ -208,11 +220,12 @@ class AuthoringStore:
     def edit(self, job_id: str, subjects: tuple[Subject, ...], title: str) -> Authoring:
         with self._lock:
             a, clip, _ = self._load(job_id)
+            was = self._planned[job_id]
             keys = {seg.key for _, seg in plan.plan(subjects, clip.cuts, clip.frame_count)}
             change = _first_change(a.subjects, subjects)
             if change is not None:
                 self._last_edit[job_id] = change
-            edited = Authoring(a.rev + 1, title, subjects, {k: v for k, v in a.segments.items() if k in keys})
+            edited = Authoring(a.rev + 1, title, subjects, _planned_plus_undo_cache(a.segments, was, keys))
             self._write(job_id, edited)
             self._planned[job_id] = frozenset(keys)
             return edited

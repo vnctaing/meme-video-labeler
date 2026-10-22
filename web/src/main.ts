@@ -49,8 +49,8 @@ function formatDuration(frameCount: number, fps: number): string {
   return `${(frameCount / fps).toFixed(1)} s`;
 }
 
-function people(n: number): string {
-  return `${n} ${n === 1 ? "person" : "people"}`;
+function subjectCount(n: number): string {
+  return `${n} ${n === 1 ? "subject" : "subjects"}`;
 }
 
 function galleryCard(t: IndexEntry): HTMLElement {
@@ -60,7 +60,7 @@ function galleryCard(t: IndexEntry): HTMLElement {
     el("img", { src: t.thumbUrl, alt: "", width: t.width, height: t.height, loading: "lazy" }),
     el("h2", {}, t.title),
     el("p", { className: "credit" }, t.credit),
-    el("p", { className: "meta" }, `${formatDuration(t.frameCount, t.fps)} · ${people(t.subjectCount)}`),
+    el("p", { className: "meta" }, `${formatDuration(t.frameCount, t.fps)} · ${subjectCount(t.subjectCount)}`),
   );
 }
 
@@ -68,7 +68,7 @@ async function galleryView(): Promise<View> {
   const templates = await loadIndex(BASE_URL);
   return {
     nodes: [
-      el("header", {}, el("h1", {}, "labelmeme"), el("p", { className: "tagline" }, "Pick a clip, name the people, download the meme.")),
+      el("header", {}, el("h1", {}, "labelmeme"), el("p", { className: "tagline" }, "Pick a clip, name the things in it, download the meme.")),
       el(
         "main",
         { className: "gallery" },

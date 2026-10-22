@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from labelmeme.authoring import AuthoringStore, ClipFacts, parse_subjects
+from labelmeme.authoring import UNDO_CACHE_SEGMENTS, AuthoringStore, ClipFacts, parse_subjects
 from labelmeme.plan import HiddenKey, PointKey, Subject, Tracked
 
 CLIP = ClipFacts(fps=24, frame_count=300, width=640, height=360, cuts=(100, 200))
@@ -24,20 +24,48 @@ def _subject(sid: str, *keys: PointKey | HiddenKey) -> Subject:
     return Subject(sid, sid.upper(), "#f5b800", keys)
 
 
-def test_an_edit_drops_cached_segments_it_no_longer_plans_and_a_superseded_result_is_discarded(tmp_path: Path) -> None:
+def test_an_edit_stops_planning_replaced_segments_and_a_superseded_result_is_discarded(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.edit("job", (_subject("s1", PointKey(40, (10, 20))),), "Title")
     lead, tail = sorted((seg for _, seg in store.missing("job")), key=lambda seg: seg.start)
     assert store.put_segment("job", lead, Tracked(0, ()))
-    assert store.put_segment("job", tail, Tracked(40, ()))
 
-    edited = store.edit("job", (_subject("s1", PointKey(40, (10, 20)), HiddenKey(60)),), "Title")
+    store.edit("job", (_subject("s1", PointKey(40, (10, 20)), HiddenKey(60)),), "Title")
 
-    assert set(edited.segments) == {lead.key}
     assert not store.is_planned("job", tail.key)
     assert not store.put_segment("job", tail, Tracked(40, ()))
+    assert tail.key not in store.read("job")[0].segments
     assert [seg.key for _, seg in store.missing("job")] == ["tail|40-60|40@10,20"]
-    assert set(store.read("job")[0].segments) == {lead.key}
+
+
+def test_undoing_an_edit_reuses_the_segments_it_replaced(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    before = (_subject("s1", PointKey(40, (10, 20))), _subject("s2", PointKey(250, (5, 5))))
+    store.edit("job", before, "Title")
+    for _, seg in store.missing("job"):
+        assert store.put_segment("job", seg, Tracked(seg.start, ()))
+
+    store.edit("job", (_subject("s1", PointKey(40, (11, 22))),), "Title")
+    assert store.missing("job") != []
+    store.edit("job", before, "Title")
+
+    assert store.missing("job") == []
+
+
+def test_an_edit_keeps_only_the_most_recently_replaced_segments(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    first = (_subject("s1", PointKey(40, (0, 0))),)
+    store.edit("job", first, "Title")
+    for _, seg in store.missing("job"):
+        assert store.put_segment("job", seg, Tracked(seg.start, ()))
+    for x in range(1, UNDO_CACHE_SEGMENTS + 1):
+        store.edit("job", (_subject("s1", PointKey(40, (x, 0))),), "Title")
+        for _, seg in store.missing("job"):
+            assert store.put_segment("job", seg, Tracked(seg.start, ()))
+
+    assert len(store.read("job")[0].segments) == UNDO_CACHE_SEGMENTS + 2
+    store.edit("job", first, "Title")
+    assert len(store.missing("job")) == 2
 
 
 def test_missing_puts_the_segment_nearest_the_last_edit_first(tmp_path: Path) -> None:

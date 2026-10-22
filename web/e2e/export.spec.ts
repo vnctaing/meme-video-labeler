@@ -70,7 +70,7 @@ test("the gallery lists every template", async ({ page }) => {
   for (const entry of index.templates) {
     const card = page.getByRole("link", { name: new RegExp(entry.title) });
     await expect(card).toContainText(`${(entry.frameCount / entry.fps).toFixed(1)} s`);
-    await expect(card).toContainText(`${entry.subjectCount} people`);
+    await expect(card).toContainText(`${entry.subjectCount} ${entry.subjectCount === 1 ? "subject" : "subjects"}`);
   }
   await page.screenshot({ path: path.join(OUT, "gallery.png"), fullPage: true });
 });

@@ -137,4 +137,10 @@ describe("modeOf and save", () => {
     const unnamed = run(drawn, { kind: "rename", id: id("s1"), name: " " });
     expect(saveBlocker(unnamed, runsOf(unnamed, CLIP))).toBe("Every drawn subject needs a name");
   });
+
+  test("save is blocked while the title is blank", () => {
+    const drawn = run(start(), ...stroke(5, 40));
+    const untitled = run(drawn, { kind: "retitle", title: "  " });
+    expect(saveBlocker(untitled, runsOf(untitled, CLIP))).toBe("Give the template a title first");
+  });
 });

@@ -50,3 +50,13 @@ def test_parse_rejects_and_names_the_path(draft: dict, path: str) -> None:
 def test_dump_and_parse_round_trip() -> None:
     once = dump_draft(parse_draft(_draft(), CLIP))
     assert dump_draft(parse_draft(json.loads(once), CLIP)) == once
+
+
+@pytest.mark.parametrize("title", ["", "   "])
+def test_a_blank_title_is_still_a_draft(title: str) -> None:
+    assert parse_draft(_draft(title=title), CLIP)["title"] == title
+
+
+def test_a_title_over_the_limit_is_rejected() -> None:
+    with pytest.raises(ValueError, match=r"^\$\.title: "):
+        parse_draft(_draft(title="x" * 201), CLIP)

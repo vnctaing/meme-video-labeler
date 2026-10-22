@@ -70,6 +70,15 @@ def test_put_twice_writes_the_same_bytes_and_get_echoes_them(tmp_path: Path) -> 
         assert client.get("/api/jobs/job/draft").json()["draft"] == _draft()
 
 
+def test_put_with_a_blank_title_keeps_the_drawing_and_save_still_refuses_it(tmp_path: Path) -> None:
+    with TestClient(create_app(_paths(tmp_path), 5184)) as client:
+        assert client.put("/api/jobs/job/draft", json=_draft() | {"title": ""}, headers=ORIGIN).status_code == 204
+        assert client.get("/api/jobs/job/draft").json()["draft"] == _draft() | {"title": ""}
+        res = client.post("/api/jobs/job/save", json={"title": " ", "subjects": [{"id": "s1", "name": "Thom", "runs": RUNS}]}, headers=ORIGIN)
+        assert res.status_code == 422
+    assert not (tmp_path / "templates/job").exists()
+
+
 def test_put_with_a_bad_track_names_the_field_and_writes_nothing(tmp_path: Path) -> None:
     paths = _paths(tmp_path)
     with TestClient(create_app(paths, 5184)) as client:

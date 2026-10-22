@@ -294,6 +294,7 @@ export function saveBlocker(s: EditorState, runs: ReadonlyMap<SubjectId, readonl
   const { subjects } = saveBody(s, runs);
   if (subjects.length === 0) return "Draw at least one subject first";
   if (subjects.some((x) => x.name.trim() === "")) return "Every drawn subject needs a name";
+  if (s.doc.title.trim() === "") return "Give the template a title first";
   return null;
 }
 

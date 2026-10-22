@@ -88,8 +88,8 @@ def parse_draft(raw: object, clip: ClipFacts) -> dict:
     if o.get("version") != 1 or isinstance(o.get("version"), bool):
         raise ValueError("$.version: expected 1")
     title = _str(o.get("title"), "$.title")
-    if not 1 <= len(title) <= MAX_TITLE:
-        raise ValueError(f"$.title: expected 1 to {MAX_TITLE} characters")
+    if len(title) > MAX_TITLE:
+        raise ValueError(f"$.title: at most {MAX_TITLE} characters")
     t = _record(o.get("tuning"), "$.tuning")
     tuning = {"lagMs": _int(t.get("lagMs"), "$.tuning.lagMs", 0, 400), "smoothRadius": _int(t.get("smoothRadius"), "$.tuning.smoothRadius", 0, 12)}
     subjects: list[dict] = []

@@ -1,5 +1,6 @@
-import type { WireRun } from "./schema.ts";
-import { type FrameIndex, type SubjectId, type TemplateId, TemplateError, array, int, isRecord, record, slug, string } from "./template.ts";
+import type { Draft, SaveBody, SubjectDraft } from "./subjects.ts";
+import { type SubjectId, type TemplateId, TemplateError, array, int, isRecord, record, slug, string } from "./template.ts";
+import { type Cell, type Clip as ClipFacts, HIDDEN, type Rate } from "./track.ts";
 
 export interface SourceFacts {
   readonly videoId: string;
@@ -45,47 +46,6 @@ export interface Job {
   readonly createdAt: string;
   readonly state: JobState;
   readonly progress: Progress | null;
-}
-
-export type Keyframe =
-  | { readonly frame: FrameIndex; readonly point: readonly [number, number] }
-  | { readonly frame: FrameIndex; readonly hidden: true };
-
-export interface SubjectDoc {
-  readonly id: SubjectId;
-  readonly name: string;
-  readonly color: string;
-  readonly keyframes: readonly Keyframe[];
-}
-
-interface SegmentSpan {
-  readonly key: string;
-  readonly from: FrameIndex;
-  readonly to: FrameIndex;
-}
-
-export type SegmentView = SegmentSpan &
-  (
-    | { readonly status: "done" | "queued" }
-    | { readonly status: "running"; readonly done: number; readonly total: number | null }
-    | { readonly status: "failed"; readonly message: string }
-  );
-
-export interface SubjectTrack {
-  readonly runs: readonly WireRun[];
-  readonly segments: readonly SegmentView[];
-}
-
-export interface AuthoringView {
-  readonly rev: number;
-  readonly title: string;
-  readonly fps: number;
-  readonly frameCount: number;
-  readonly width: number;
-  readonly height: number;
-  readonly cuts: readonly number[];
-  readonly subjects: readonly SubjectDoc[];
-  readonly tracks: ReadonlyMap<SubjectId, SubjectTrack>;
 }
 
 export class ServerNotAnswering extends Error {
@@ -204,83 +164,50 @@ export function parseJob(json: unknown, path = "$"): Job {
   };
 }
 
-function parseKeyframe(v: unknown, path: string): Keyframe {
-  const o = record(v, path);
-  const frame = int(o.frame, `${path}.frame`, 0) as FrameIndex;
-  if (o.hidden === true) return { frame, hidden: true };
-  const p = array(o.point, `${path}.point`);
-  if (p.length !== 2) throw new TemplateError(`${path}.point`, "expected [x, y]");
-  return { frame, point: [int(p[0], `${path}.point[0]`, 0), int(p[1], `${path}.point[1]`, 0)] };
+const RATES: readonly Rate[] = [0.25, 0.5, 1];
+
+function parseCell(v: unknown, path: string): Cell {
+  if (v === null || v === HIDDEN) return v;
+  const a = array(v, path);
+  if (a.length !== 4) throw new TemplateError(path, "expected null, \"hidden\" or [x, y, size, rate]");
+  const rate = RATES.find((r) => r === a[3]);
+  if (rate === undefined) throw new TemplateError(`${path}[3]`, `expected a rate in ${RATES.join(", ")}`);
+  return [number(a[0], `${path}[0]`), number(a[1], `${path}[1]`), number(a[2], `${path}[2]`), rate];
 }
 
-function parseSubjectDoc(v: unknown, path: string): SubjectDoc {
+function parseSubjectDraft(v: unknown, path: string, clip: ClipFacts): SubjectDraft {
+  const o = record(v, path);
+  const track = array(o.track, `${path}.track`).map((c, f) => parseCell(c, `${path}.track[${f}]`));
+  if (track.length !== clip.frameCount) throw new TemplateError(`${path}.track`, `expected ${clip.frameCount} cells, got ${track.length}`);
+  return { id: slug(o.id, `${path}.id`) as SubjectId, name: string(o.name, `${path}.name`), color: string(o.color, `${path}.color`), track };
+}
+
+function parseClipFacts(v: unknown, path: string): ClipFacts {
   const o = record(v, path);
   return {
-    id: slug(o.id, `${path}.id`) as SubjectId,
-    name: string(o.name, `${path}.name`),
-    color: string(o.color, `${path}.color`),
-    keyframes: array(o.keyframes, `${path}.keyframes`).map((k, i) => parseKeyframe(k, `${path}.keyframes[${i}]`)),
+    width: int(o.width, `${path}.width`, 1),
+    height: int(o.height, `${path}.height`, 1),
+    fps: int(o.fps, `${path}.fps`, 1),
+    frameCount: int(o.frameCount, `${path}.frameCount`, 1),
+    cuts: array(o.cuts, `${path}.cuts`).map((c, i) => int(c, `${path}.cuts[${i}]`, 1)),
   };
 }
 
-function parseSegment(v: unknown, path: string): SegmentView {
-  const o = record(v, path);
-  const span = { key: string(o.key, `${path}.key`), from: int(o.from, `${path}.from`, 0) as FrameIndex, to: int(o.to, `${path}.to`, 1) as FrameIndex };
-  const status = oneOf(o.status, `${path}.status`, ["done", "queued", "running", "failed"] as const);
-  switch (status) {
-    case "done":
-    case "queued":
-      return { ...span, status };
-    case "running":
-      return { ...span, status, done: int(o.done, `${path}.done`, 0), total: o.total === null ? null : int(o.total, `${path}.total`, 1) };
-    case "failed":
-      return { ...span, status, message: string(o.message, `${path}.message`) };
-    default: {
-      const _exhaustive: never = status;
-      return _exhaustive;
-    }
-  }
-}
-
-function parseRun(v: unknown, path: string): WireRun {
-  const o = record(v, path);
-  return {
-    from: int(o.from, `${path}.from`, 0),
-    boxes: array(o.boxes, `${path}.boxes`).map((b, i) => {
-      const a = array(b, `${path}.boxes[${i}]`);
-      if (a.length !== 4) throw new TemplateError(`${path}.boxes[${i}]`, "expected [x, y, w, h]");
-      return [int(a[0], `${path}.boxes[${i}][0]`, 0), int(a[1], `${path}.boxes[${i}][1]`, 0), int(a[2], `${path}.boxes[${i}][2]`, 1), int(a[3], `${path}.boxes[${i}][3]`, 1)];
-    }),
-  };
-}
-
-export function parseAuthoring(json: unknown): AuthoringView {
+export function parseDraftView(json: unknown): { readonly draft: Draft; readonly clip: ClipFacts } {
   const o = record(json, "$");
-  const tracks = record(o.tracks, "$.tracks");
+  const clip = parseClipFacts(o.clip, "$.clip");
+  const d = record(o.draft, "$.draft");
+  const t = record(d.tuning, "$.draft.tuning");
   return {
-    rev: int(o.rev, "$.rev", 0),
-    title: string(o.title, "$.title"),
-    fps: int(o.fps, "$.fps", 1),
-    frameCount: int(o.frameCount, "$.frameCount", 1),
-    width: int(o.width, "$.width", 1),
-    height: int(o.height, "$.height", 1),
-    cuts: array(o.cuts, "$.cuts").map((c, i) => int(c, `$.cuts[${i}]`, 1)),
-    subjects: array(o.subjects, "$.subjects").map((s, i) => parseSubjectDoc(s, `$.subjects[${i}]`)),
-    tracks: new Map(
-      Object.entries(tracks).map(([id, t]): [SubjectId, SubjectTrack] => {
-        const p = `$.tracks.${id}`;
-        const r = record(t, p);
-        return [
-          id as SubjectId,
-          {
-            runs: array(r.runs, `${p}.runs`).map((run, i) => parseRun(run, `${p}.runs[${i}]`)),
-            segments: array(r.segments, `${p}.segments`).map((seg, i) => parseSegment(seg, `${p}.segments[${i}]`)),
-          },
-        ];
-      }),
-    ),
+    clip,
+    draft: {
+      doc: { title: string(d.title, "$.draft.title"), subjects: array(d.subjects, "$.draft.subjects").map((s, i) => parseSubjectDraft(s, `$.draft.subjects[${i}]`, clip)) },
+      tuning: { lagMs: int(t.lagMs, "$.draft.tuning.lagMs", 0), smoothRadius: int(t.smoothRadius, "$.draft.tuning.smoothRadius", 0) },
+    },
   };
 }
+
+const draftJson = ({ doc, tuning }: Draft) => ({ version: 1, title: doc.title, tuning, subjects: doc.subjects });
 
 const PROXY_UPSTREAM_DOWN = new Set([502, 503, 504]);
 
@@ -311,10 +238,11 @@ export const createJob = async (url: string, id: string | null): Promise<Job> =>
 export const getJob = async (id: TemplateId): Promise<Job> => parseJob(await request("GET", jobUrl(id)));
 export const chooseClip = async (id: TemplateId, clip: Clip): Promise<Job> =>
   parseJob(await request("PUT", jobUrl(id, "/clip"), clip));
-export const getAuthoring = async (id: TemplateId): Promise<AuthoringView> => parseAuthoring(await request("GET", jobUrl(id, "/authoring")));
-export const putAuthoring = async (id: TemplateId, title: string, subjects: readonly SubjectDoc[]): Promise<AuthoringView> =>
-  parseAuthoring(await request("PUT", jobUrl(id, "/authoring"), { title, subjects }));
+export const getDraft = async (id: TemplateId) => parseDraftView(await request("GET", jobUrl(id, "/draft")));
+export const putDraft = async (id: TemplateId, draft: Draft): Promise<void> => {
+  await request("PUT", jobUrl(id, "/draft"), draftJson(draft));
+};
 export const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
-export const save = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/save")));
+export const save = async (id: TemplateId, body: SaveBody): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/save"), body));
 export const retry = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/retry")));
 export const sourceUrl = (id: TemplateId): string => jobUrl(id, "/source.mp4");

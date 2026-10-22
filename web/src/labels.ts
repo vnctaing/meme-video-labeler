@@ -50,6 +50,29 @@ function scaleBox(b: Box, k: number): Box {
   return { x: b.x * k, y: b.y * k, w: b.w * k, h: b.h * k };
 }
 
+export function measureOn(ctx: Ctx2D): Measure {
+  return (text, fontPx) => {
+    ctx.font = `${fontPx}px ${FONT_STACK}`;
+    const m = ctx.measureText(text);
+    return { width: m.width, ascent: m.actualBoundingBoxAscent };
+  };
+}
+
+export function drawLabel(ctx: Ctx2D, layout: LabelLayout, alpha: number): void {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.font = `${layout.fontPx}px ${FONT_STACK}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = layout.lineWidth;
+  ctx.strokeStyle = "#000";
+  ctx.fillStyle = "#fff";
+  ctx.strokeText(layout.text, layout.centerX, layout.baseline);
+  ctx.fillText(layout.text, layout.centerX, layout.baseline);
+  ctx.restore();
+}
+
 export function drawLabels(
   ctx: Ctx2D,
   template: Template,
@@ -58,30 +81,14 @@ export function drawLabels(
   w: number,
   h: number,
 ): void {
-  const measure: Measure = (text, fontPx) => {
-    ctx.font = `${fontPx}px ${FONT_STACK}`;
-    const m = ctx.measureText(text);
-    return { width: m.width, ascent: m.actualBoundingBoxAscent };
-  };
+  const measure = measureOn(ctx);
   const scale = w / template.width;
   for (const subject of template.subjects) {
     const text = labels.get(subject.id)?.trim().toUpperCase() ?? "";
     if (text === "") continue;
     const placement = placementAt(subject, frameIndex, template);
     if (placement === null) continue;
-    const layout = layoutLabel(measure, text, scaleBox(placement.box, scale), w, h);
-    ctx.save();
-    ctx.globalAlpha = placement.alpha;
-    ctx.font = `${layout.fontPx}px ${FONT_STACK}`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "alphabetic";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = layout.lineWidth;
-    ctx.strokeStyle = "#000";
-    ctx.fillStyle = "#fff";
-    ctx.strokeText(layout.text, layout.centerX, layout.baseline);
-    ctx.fillText(layout.text, layout.centerX, layout.baseline);
-    ctx.restore();
+    drawLabel(ctx, layoutLabel(measure, text, scaleBox(placement.box, scale), w, h), placement.alpha);
   }
 }
 

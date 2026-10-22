@@ -8,7 +8,7 @@ import {
   type SourceFacts,
   chooseClip,
   createJob,
-  getAuthoring,
+  getDraft,
   getJob,
   listJobs,
   retry,
@@ -351,7 +351,7 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
     { className: "clip-panel" },
     el("h2", {}, current === null ? "2. Choose the clip" : "Change the clip"),
     el("p", { className: "hint" }, `${source.title} · ${source.channel} · ${seconds(duration)}`),
-    current === null ? "" : el("p", { className: "hint" }, "A new clip discards every subject and keyframe."),
+    current === null ? "" : el("p", { className: "hint" }, "A new clip discards every drawing."),
     form,
   );
 }
@@ -360,7 +360,7 @@ function editorPanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job
   const node = el("section", { className: "subject-editor" }, el("p", { role: "status" }, "Loading the editor…"));
   let alive = true;
   let destroy = () => {};
-  getAuthoring(id)
+  getDraft(id)
     .then((view) => {
       if (!alive) return;
       node.replaceChildren();

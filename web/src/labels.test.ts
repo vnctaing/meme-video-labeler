@@ -43,6 +43,11 @@ describe("layoutLabel", () => {
     expect(long.right).toBeLessThanOrEqual(W);
   });
 
+  test("keeps the label of a small object at least 4% of the frame height", () => {
+    const b = bounds("EYEPIECE", { x: 300, y: 150, w: 12, h: 12 });
+    expect(b.fontPx).toBeGreaterThanOrEqual(0.04 * H);
+  });
+
   test("keeps a label for a box at the right edge inside the frame", () => {
     const b = bounds("VINCENT", { x: 600, y: 100, w: 40, h: 80 });
     expect(b.right).toBeLessThanOrEqual(W);

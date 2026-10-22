@@ -19,7 +19,7 @@ export interface LabelLayout {
 
 const FONT_STACK = "Anton, Impact, sans-serif";
 const FONT_PER_BOX_WIDTH = 0.28;
-const MIN_FONT_PER_HEIGHT = 0.035;
+const MIN_FONT_PER_HEIGHT = 0.04;
 const MAX_FONT_PER_HEIGHT = 0.11;
 const SIDE_MARGIN_PER_WIDTH = 0.02;
 const GAP_PER_FONT = 0.12;

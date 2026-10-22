@@ -116,10 +116,6 @@ def is_running(state: State) -> bool:
     return isinstance(state, (Downloading, Preparing))
 
 
-def is_editable(state: State) -> bool:
-    return isinstance(state, (Editing, Ready))
-
-
 @dataclass(frozen=True, slots=True)
 class StepDone:
     pass
@@ -387,7 +383,7 @@ class Jobs:
             yield job
 
     def recover(self) -> list[Job]:
-        pending = sorted((j for j in self.list() if is_running(j.state) or is_editable(j.state)), key=lambda j: j.created_at)
+        pending = sorted((j for j in self.list() if is_running(j.state)), key=lambda j: j.created_at)
         for job in pending:
             self._enqueue(job, True)
         return pending

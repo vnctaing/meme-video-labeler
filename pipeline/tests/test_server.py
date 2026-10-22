@@ -1,148 +1,142 @@
 import json
 import shutil
-import threading
 import time
-from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from labelmeme.authoring import AuthoringStore
+from labelmeme import worker
 from labelmeme.job import Clip as JobClip
 from labelmeme.job import ClipChosen, Jobs, SourceFacts, StepDone
-from labelmeme.plan import PointKey, Segment, Subject, Tracked
+from labelmeme.prep import VideoFacts
 from labelmeme.server import create_app
-from labelmeme.tracker import Cancelled, Clip
 from labelmeme.worker import Paths
 
 FIXTURE = Path(__file__).resolve().parents[2] / "web/public/templates/fixture"
 SOURCE = SourceFacts("abc", "https://www.youtube.com/watch?v=abc", "Fixture", "Me", 60.0, 640, 360)
-BOX = (100, 50, 40, 80)
 ORIGIN = {"origin": "http://localhost:5184"}
+FACTS = {"id": "job", "title": "Fixture", "credit": "Me", "width": 640, "height": 360, "fps": 24, "frameCount": 48}
 
 
-class FakeTracker:
-    def __init__(self) -> None:
-        self.tracked: list[str] = []
-
-    def track(self, clip: Clip, seg: Segment, *, on_frame: Callable[[int, int], None], cancelled: Callable[[], bool]) -> Tracked:
-        for i in range(3):
-            on_frame(i + 1, 3)
-            if cancelled():
-                raise Cancelled(seg.key)
-        self.tracked.append(seg.key)
-        return Tracked(seg.start, tuple(BOX for _ in range(seg.start, seg.stop)))
+def _clip_files(work: Path) -> None:
+    for name in ("video.mp4", "thumb.jpg"):
+        shutil.copyfile(FIXTURE / name, work / name)
+    (work / "SOURCE.md").write_text("# job\n")
+    (work / "video.json").write_text(json.dumps(FACTS))
+    (work / "cuts.json").write_text(json.dumps({"cuts": [{"frame": 24}]}))
 
 
 def _paths(tmp_path: Path) -> Paths:
-    paths = Paths(tmp_path / "work", tmp_path / "models", tmp_path / "templates")
+    paths = Paths(tmp_path / "work", tmp_path / "templates")
     jobs = Jobs(paths.work_dir, paths.templates_dir, lambda job, resumed: None)
     jobs.create("job", SOURCE)
     for event in (StepDone(), ClipChosen(JobClip(1.0, 3.0, "Fixture", "Me", "l")), StepDone()):
         jobs.transition("job", event)
-    work = paths.work_dir / "job"
-    for name in ("video.mp4", "thumb.jpg"):
-        shutil.copyfile(FIXTURE / name, work / name)
-    (work / "SOURCE.md").write_text("# job\n")
-    (work / "video.json").write_text(json.dumps({"id": "job", "title": "Fixture", "credit": "Me", "width": 640, "height": 360, "fps": 24, "frameCount": 48}))
-    (work / "cuts.json").write_text(json.dumps({"cuts": [{"frame": 24}]}))
-    AuthoringStore(paths.work_dir).reset("job", "Fixture")
+    _clip_files(paths.work_dir / "job")
     return paths
 
 
-def _settled(client: TestClient) -> dict:
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        view = client.get("/api/jobs/job/authoring").json()
-        if all(seg["status"] == "done" for t in view["tracks"].values() for seg in t["segments"]):
-            return view
-        time.sleep(0.02)
-    raise AssertionError(f"segments did not finish: {view}")
+def _draft(track: list | None = None) -> dict:
+    track = track if track is not None else [None] * 10 + [[100.5, 80, 30, 0.5]] * 14 + [None] * 24
+    return {"version": 1, "title": "Drawn", "tuning": {"lagMs": 120, "smoothRadius": 3},
+            "subjects": [{"id": "s1", "name": "Thom", "color": "#f5a524", "track": track}]}
 
 
-def _put(client: TestClient, *keyframes: dict) -> dict:
-    subjects = [{"id": "s1", "name": "Thom", "color": "#f5b800", "keyframes": list(keyframes)}]
-    res = client.put("/api/jobs/job/authoring", json={"title": "Edited", "subjects": subjects}, headers=ORIGIN)
+def _save(client: TestClient, subjects: list) -> object:
+    return client.post("/api/jobs/job/save", json={"title": "Drawn", "subjects": subjects}, headers=ORIGIN)
+
+
+RUNS = [{"from": 10, "boxes": [[90, 80, 40, 1]] * 14}]
+
+
+def test_a_fresh_job_has_an_empty_draft_and_the_clip_facts(tmp_path: Path) -> None:
+    with TestClient(create_app(_paths(tmp_path), 5184)) as client:
+        res = client.get("/api/jobs/job/draft")
     assert res.status_code == 200, res.text
-    return res.json()
+    assert res.json() == {
+        "draft": {"version": 1, "title": "Fixture", "tuning": {"lagMs": 150, "smoothRadius": 4}, "subjects": []},
+        "clip": {"width": 640, "height": 360, "fps": 24, "frameCount": 48, "cuts": [24]},
+    }
 
 
-def test_a_correction_retracks_only_its_two_segments_and_save_writes_the_hide(tmp_path: Path) -> None:
-    fake = FakeTracker()
-    with TestClient(create_app(_paths(tmp_path), 5184, fake)) as client:
-        _put(client, {"frame": 10, "point": [120, 90]})
-        view = _settled(client)
-        assert fake.tracked == ["tail|10-24|10@120,90", "lead|0-10|10@120,90"]
-        assert [(r["from"], len(r["boxes"])) for r in view["tracks"]["s1"]["runs"]] == [(0, 24)]
+def test_put_twice_writes_the_same_bytes_and_get_echoes_them(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    with TestClient(create_app(paths, 5184)) as client:
+        assert client.put("/api/jobs/job/draft", json=_draft(), headers=ORIGIN).status_code == 204
+        first = (paths.work_dir / "job/draft.json").read_bytes()
+        assert client.put("/api/jobs/job/draft", json=_draft(), headers=ORIGIN).status_code == 204
+        assert (paths.work_dir / "job/draft.json").read_bytes() == first
+        assert client.get("/api/jobs/job/draft").json()["draft"] == _draft()
 
-        fake.tracked.clear()
-        _put(client, {"frame": 10, "point": [120, 90]}, {"frame": 18, "point": [130, 95]})
-        _settled(client)
-        assert sorted(fake.tracked) == ["bridge|10-18|10@120,90;18@130,95", "tail|18-24|18@130,95"]
 
-        fake.tracked.clear()
-        _put(client, {"frame": 10, "point": [120, 90]}, {"frame": 18, "point": [130, 95]}, {"frame": 20, "hidden": True})
-        _settled(client)
-        assert fake.tracked == ["tail|18-20|18@130,95"]
+def test_put_with_a_blank_title_keeps_the_drawing_and_save_still_refuses_it(tmp_path: Path) -> None:
+    with TestClient(create_app(_paths(tmp_path), 5184)) as client:
+        assert client.put("/api/jobs/job/draft", json=_draft() | {"title": ""}, headers=ORIGIN).status_code == 204
+        assert client.get("/api/jobs/job/draft").json()["draft"] == _draft() | {"title": ""}
+        res = client.post("/api/jobs/job/save", json={"title": " ", "subjects": [{"id": "s1", "name": "Thom", "runs": RUNS}]}, headers=ORIGIN)
+        assert res.status_code == 422
+    assert not (tmp_path / "templates/job").exists()
 
-        res = client.post("/api/jobs/job/save", headers=ORIGIN)
+
+def test_put_with_a_bad_track_names_the_field_and_writes_nothing(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    with TestClient(create_app(paths, 5184)) as client:
+        res = client.put("/api/jobs/job/draft", json=_draft([None] * 47), headers=ORIGIN)
+    assert (res.status_code, res.json()["field"]) == (422, "$.subjects[0].track")
+    assert not (paths.work_dir / "job/draft.json").exists()
+
+
+def test_put_while_downloading_is_a_conflict(tmp_path: Path) -> None:
+    paths = Paths(tmp_path / "work", tmp_path / "templates")
+    Jobs(paths.work_dir, paths.templates_dir, lambda job, resumed: None).create("job", SOURCE)
+    client = TestClient(create_app(paths, 5184))
+    assert client.put("/api/jobs/job/draft", json=_draft(), headers=ORIGIN).status_code == 409
+
+
+def test_save_writes_the_template_and_a_second_save_rewrites_it(tmp_path: Path) -> None:
+    with TestClient(create_app(_paths(tmp_path), 5184)) as client:
+        res = _save(client, [{"id": "s1", "name": " Thom ", "runs": RUNS}])
         assert res.status_code == 200, res.text
         assert res.json()["state"]["kind"] == "ready"
         template = json.loads((tmp_path / "templates/job/template.json").read_text())
-        assert template["title"] == "Edited"
-        assert [(r["from"], len(r["boxes"])) for r in template["subjects"][0]["runs"]] == [(0, 20)]
+        assert (template["title"], template["subjects"]) == ("Drawn", [{"id": "s1", "name": "Thom", "runs": RUNS}])
+        assert _save(client, [{"id": "s1", "name": "Bob", "runs": RUNS}]).status_code == 200
+        assert json.loads((tmp_path / "templates/job/template.json").read_text())["subjects"][0]["name"] == "Bob"
 
 
-def test_a_restart_tracks_the_segments_a_crash_left_missing(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("subjects", "field"), [
+    ([], "subjects"),
+    ([{"id": "s1", "name": "  ", "runs": RUNS}], "subjects[0].name"),
+    ([{"id": "s1", "name": "Thom", "runs": [{"from": 20, "boxes": [[90, 80, 40, 1]] * 8}]}], "$.subjects[0].runs[0]"),
+])
+def test_save_refuses_and_names_the_field(tmp_path: Path, subjects: list, field: str) -> None:
+    with TestClient(create_app(_paths(tmp_path), 5184)) as client:
+        res = _save(client, subjects)
+        assert (res.status_code, res.json()["field"]) == (422, field)
+        assert client.get("/api/jobs/job").json()["state"]["kind"] == "editing"
+    assert not (tmp_path / "templates/job").exists()
+
+
+def test_a_new_clip_removes_the_draft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     paths = _paths(tmp_path)
-    AuthoringStore(paths.work_dir).edit("job", (Subject("s1", "Thom", "#f5b800", (PointKey(30, (120, 90)),)),), "Fixture")
-    fake = FakeTracker()
-    with TestClient(create_app(paths, 5184, fake)) as client:
-        _settled(client)
-    assert sorted(fake.tracked) == ["lead|24-30|30@120,90", "tail|30-48|30@120,90"]
+    sources = paths.sources_dir / "abc"
+    sources.mkdir(parents=True)
+    (sources / "source.mp4").write_bytes(b"")
 
+    def fake_prep(spec: object, work: Path, command: str) -> VideoFacts:
+        _clip_files(work)
+        return VideoFacts(**FACTS)
 
-def test_save_refuses_while_segments_track_and_names_a_blank_name(tmp_path: Path) -> None:
-    paths = _paths(tmp_path)
-    with TestClient(create_app(paths, 5184, FakeTracker())) as client:
-        subjects = [{"id": "s1", "name": "", "color": "#f5b800", "keyframes": [{"frame": 30, "point": [120, 90]}]}]
-        client.put("/api/jobs/job/authoring", json={"title": "T", "subjects": subjects}, headers=ORIGIN)
-        _settled(client)
-        res = client.post("/api/jobs/job/save", headers=ORIGIN)
-        assert (res.status_code, res.json()["field"]) == (422, "subjects[0].name")
-        bad = client.put("/api/jobs/job/authoring", json={"title": "T", "subjects": [{**subjects[0], "keyframes": [{"frame": 99, "hidden": True}]}]}, headers=ORIGIN)
-        assert (bad.status_code, bad.json()["field"]) == (422, "subjects[0].keyframes[0].frame")
-
-
-class GatedTracker(FakeTracker):
-    def __init__(self) -> None:
-        super().__init__()
-        self.entered = threading.Event()
-        self.release = threading.Event()
-
-    def track(self, clip: Clip, seg: Segment, *, on_frame: Callable[[int, int], None], cancelled: Callable[[], bool]) -> Tracked:
-        self.entered.set()
-        assert self.release.wait(10)
-        return super().track(clip, seg, on_frame=on_frame, cancelled=cancelled)
-
-
-def test_a_store_error_fails_its_segment_and_the_worker_keeps_tracking(tmp_path: Path) -> None:
-    paths = _paths(tmp_path)
-    cuts = paths.work_dir / "job/cuts.json"
-    good = cuts.read_text()
-    fake = GatedTracker()
-    with TestClient(create_app(paths, 5184, fake)) as client:
-        _put(client, {"frame": 10, "point": [120, 90]})
-        assert fake.entered.wait(5)
-        cuts.write_text(json.dumps({"cuts": [{"frame": 999}]}))
-        fake.release.set()
-        time.sleep(0.3)
-        cuts.write_text(good)
-
-        failed = [s for s in client.get("/api/jobs/job/authoring").json()["tracks"]["s1"]["segments"] if s["status"] == "failed"]
-        assert [(s["key"], "cuts.json" in s["message"]) for s in failed] == [("tail|10-24|10@120,90", True)]
-
-        fake.tracked.clear()
-        _put(client, {"frame": 12, "point": [120, 90]})
-        _settled(client)
-        assert sorted(fake.tracked) == ["lead|0-12|12@120,90", "tail|12-24|12@120,90"]
+    monkeypatch.setattr(worker, "prep", fake_prep)
+    monkeypatch.setattr(worker, "write_cuts", lambda work, fps: [])
+    with TestClient(create_app(paths, 5184)) as client:
+        assert client.put("/api/jobs/job/draft", json=_draft(), headers=ORIGIN).status_code == 204
+        res = client.put("/api/jobs/job/clip", json={"start": 2, "end": 5, "title": "New", "credit": "Me"}, headers=ORIGIN)
+        assert res.status_code == 200, res.text
+        for _ in range(200):
+            if client.get("/api/jobs/job").json()["state"]["kind"] == "editing":
+                break
+            time.sleep(0.02)
+        assert client.get("/api/jobs/job").json()["state"]["kind"] == "editing"
+        assert client.get("/api/jobs/job/draft").json()["draft"]["subjects"] == []

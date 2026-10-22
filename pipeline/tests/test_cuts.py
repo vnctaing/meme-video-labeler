@@ -19,7 +19,7 @@ def test_reads_valid_cuts(tmp_path: Path) -> None:
     ("frames", "bad"),
     [([0], "0"), ([48], "48"), ([30, 24], "24"), ([24, 24], "24"), ([24.5], "24.5"), (["24"], "'24'"), ([True], "True")],
 )
-def test_rejects_a_cut_the_tracker_cannot_start_a_shot_at(tmp_path: Path, frames: list[object], bad: str) -> None:
+def test_rejects_a_cut_that_cannot_start_a_shot(tmp_path: Path, frames: list[object], bad: str) -> None:
     _write_cuts(tmp_path, frames)
     with pytest.raises(ValueError, match=rf"cuts\.json: .*, got {bad}$"):
         read_cuts(tmp_path, 48)

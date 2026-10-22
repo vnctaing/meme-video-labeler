@@ -81,7 +81,7 @@ const clickVideo = async (x, y) => {
   await page.mouse.click(box.x + (x * box.width) / 1280, box.y + (y * box.height) / 534);
 };
 const addSubject = async (name) => {
-  await page.getByRole("button", { name: "+ Add subject" }).click();
+  await page.locator(".timeline button.add-subject").click();
   await page.keyboard.type(name);
   await page.keyboard.press("Tab");
 };
@@ -113,7 +113,7 @@ try {
   await shot(page, "03-clip.png");
   await page.getByRole("button", { name: "Use this clip" }).click();
 
-  await page.getByText("+ Add subject to start").waitFor({ timeout: 120_000 });
+  await page.getByText("Add the first thing to label").waitFor({ timeout: 120_000 });
   await page.waitForFunction(() => Number(document.querySelector("canvas.editor-canvas")?.dataset.frame) === 0);
   await shot(page, "04-editor-empty.png");
 

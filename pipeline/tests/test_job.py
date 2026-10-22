@@ -158,7 +158,7 @@ def test_transition_writes_through_and_enqueues_only_running_states(tmp_path: Pa
     assert jobs.get("a").state == Preparing(SOURCE, CLIP)
 
 
-def test_recover_enqueues_running_and_editable_jobs_oldest_first(tmp_path: Path) -> None:
+def test_recover_enqueues_only_running_jobs_oldest_first(tmp_path: Path) -> None:
     jobs, _ = _store(tmp_path)
     for job_id in ("b", "a", "c", "d"):
         jobs.create(job_id, SOURCE)
@@ -169,8 +169,8 @@ def test_recover_enqueues_running_and_editable_jobs_oldest_first(tmp_path: Path)
     (tmp_path / "work/.sources").mkdir()
 
     restarted, enqueued = _store(tmp_path)
-    assert [j.id for j in restarted.recover()] == ["b", "c", "d"]
-    assert enqueued == [("b", True), ("c", True), ("d", True)]
+    assert [j.id for j in restarted.recover()] == ["b", "c"]
+    assert enqueued == [("b", True), ("c", True)]
     assert {j.id for j in restarted.list()} == {"a", "b", "c", "d"}
 
 

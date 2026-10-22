@@ -3,7 +3,6 @@ Starlette's FileResponse answers Range requests, which the Clip step's <video> n
 from __future__ import annotations
 
 import logging
-import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -13,15 +12,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
 
-from labelmeme import plan, youtube
-from labelmeme.authoring import AuthoringStore, parse_subjects, subject_json
-from labelmeme.build import build
+from labelmeme import youtube
 from labelmeme.job import (
-    DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
+    DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, SourceFacts,
     UnknownJob, derive_id, is_running, parse_clip, state_json,
 )
-from labelmeme.shaping import ShapeParams, shape_subject
-from labelmeme.worker import Paths, SegmentTracker, Worker
+from labelmeme.worker import Paths, Worker
 
 log = logging.getLogger("labelmeme.server")
 
@@ -42,11 +38,6 @@ class ChooseClip(BaseModel):
     license: Text = DEFAULT_LICENSE
 
 
-class PutAuthoring(BaseModel):
-    title: Text
-    subjects: list[dict[str, object]]
-
-
 class ApiError(Exception):
     def __init__(self, status: int, message: str, field: str | None = None) -> None:
         super().__init__(message)
@@ -59,10 +50,9 @@ def _source_of(job: Job) -> SourceFacts:
     return state.source
 
 
-def create_app(paths: Paths, web_port: int, tracker: SegmentTracker | None = None) -> FastAPI:
+def create_app(paths: Paths, web_port: int) -> FastAPI:
     allowed_origins = {f"http://localhost:{web_port}", f"http://127.0.0.1:{web_port}"}
-    store = AuthoringStore(paths.work_dir)
-    worker = Worker(paths, store, tracker)
+    worker = Worker(paths)
     jobs = Jobs(paths.work_dir, paths.templates_dir, worker.enqueue)
 
     @asynccontextmanager
@@ -109,35 +99,6 @@ def create_app(paths: Paths, web_port: int, tracker: SegmentTracker | None = Non
             },
         }
 
-    def authoring_out(job_id: str) -> dict:
-        a, clip = store.read(job_id)
-        running = worker.segment_progress(job_id)
-        failures = worker.failures(job_id)
-
-        def segment_out(seg: plan.Segment) -> dict:
-            out: dict = {"key": seg.key, "from": seg.start, "to": seg.stop}
-            if seg.key in a.segments:
-                return out | {"status": "done"}
-            if running is not None and running.key == seg.key:
-                return out | {"status": "running", "done": running.done, "total": running.total}
-            if seg.key in failures:
-                return out | {"status": "failed", "message": failures[seg.key]}
-            return out | {"status": "queued"}
-
-        tracks = {}
-        for s in a.subjects:
-            segments = plan.plan_subject(s.keyframes, clip.cuts, clip.frame_count)
-            frames = plan.boxes_by_frame(segments, a.segments)
-            tracks[s.id] = {
-                "runs": shape_subject(frames, plan.breaks(s.keyframes, clip.cuts), clip.width, clip.height, ShapeParams()),
-                "segments": [segment_out(seg) for seg in segments],
-            }
-        return {
-            "rev": a.rev, "title": a.title, "fps": clip.fps, "frameCount": clip.frame_count,
-            "width": clip.width, "height": clip.height, "cuts": list(clip.cuts),
-            "subjects": [subject_json(s) for s in a.subjects], "tracks": tracks,
-        }
-
     @app.get("/api/jobs")
     def list_jobs() -> list[dict]:
         return [job_out(j) for j in jobs.list()]
@@ -179,47 +140,6 @@ def create_app(paths: Paths, web_port: int, tracker: SegmentTracker | None = Non
     def clip_video(job_id: str) -> FileResponse:
         with jobs.with_settled(job_id, ("editing", "ready")):
             return FileResponse(paths.work_dir / job_id / "video.mp4", media_type="video/mp4")
-
-    @app.get("/api/jobs/{job_id}/authoring")
-    def get_authoring(job_id: str) -> dict:
-        with jobs.with_settled(job_id, ("editing", "ready")):
-            return authoring_out(job_id)
-
-    @app.put("/api/jobs/{job_id}/authoring")
-    def put_authoring(job_id: str, body: PutAuthoring) -> dict:
-        with jobs.with_settled(job_id, ("editing", "ready")) as job:
-            _, clip = store.read(job_id)
-            try:
-                subjects = parse_subjects(body.subjects, clip, "subjects")
-            except ValueError as e:
-                raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
-            store.edit(job_id, subjects, body.title)
-            worker.clear_failures(job_id)
-            worker.enqueue(job, False)
-            return authoring_out(job_id)
-
-    @app.post("/api/jobs/{job_id}/save")
-    def save(job_id: str) -> dict:
-        with jobs.with_settled(job_id, ("editing", "ready")):
-            a, clip = store.read(job_id)
-            planned = plan.plan(a.subjects, clip.cuts, clip.frame_count)
-            todo = plan.missing(planned, a.segments)
-            failures = worker.failures(job_id)
-            failed = [failures[seg.key] for _, seg in todo if seg.key in failures]
-            if failed:
-                raise ApiError(409, f"{len(failed)} segments failed to track: {failed[0]}")
-            if todo:
-                raise ApiError(409, f"{len(todo)} segments are still tracking")
-            boxed = {s.id for s in a.subjects if plan.boxes_by_frame(plan.plan_subject(s.keyframes, clip.cuts, clip.frame_count), a.segments)}
-            for i, s in enumerate(a.subjects):
-                if s.id in boxed and s.name == "":
-                    raise ApiError(422, "every subject with a label needs a name", f"subjects[{i}].name")
-            if not boxed:
-                raise ApiError(422, "click the video to place at least one subject", "subjects")
-            started = time.perf_counter()
-            build(paths.work_dir / job_id, paths.templates_dir, ShapeParams())
-            log.info("saved %s in %.2f s", job_id, time.perf_counter() - started)
-            return job_out(jobs.transition(job_id, Saved()))
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry(job_id: str) -> dict:

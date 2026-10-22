@@ -5,15 +5,12 @@ import shlex
 import sys
 from pathlib import Path
 
-from labelmeme.build import build
 from labelmeme.fixture import make_fixture
 from labelmeme.prep import PrepSpec, prep
 from labelmeme.schema import SLUG
-from labelmeme.shaping import ShapeParams
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 WORK_DIR = PIPELINE_DIR / "work"
-MODELS_DIR = PIPELINE_DIR / "models"
 TEMPLATES_DIR = PIPELINE_DIR.parent / "web" / "public" / "templates"
 
 
@@ -46,9 +43,6 @@ def main() -> None:
     p.add_argument("--license", required=True, help="license of the source, for SOURCE.md")
     p.add_argument("--fps", type=int, default=24)
 
-    b = commands.add_parser("build", help="shape work/<id>/authoring.json into web/public/templates/<id>/")
-    b.add_argument("id", type=_slug)
-
     s = commands.add_parser("serve", help="run the authoring API that `npm run dev:author` starts")
     s.add_argument("--port", type=int, default=8787)
     s.add_argument("--web-port", type=int, default=5174, help="the Vite port whose pages may call the API")
@@ -64,13 +58,11 @@ def main() -> None:
             )
             command = shlex.join(["uv", "run", "python", "-m", "labelmeme", *sys.argv[1:]])
             print(prep(spec, WORK_DIR / spec.id, command))
-        case "build":
-            build(WORK_DIR / args.id, TEMPLATES_DIR, ShapeParams())
         case "serve":
             from labelmeme.server import serve
             from labelmeme.worker import Paths
 
-            serve(Paths(WORK_DIR, MODELS_DIR, TEMPLATES_DIR), args.port, args.web_port)
+            serve(Paths(WORK_DIR, TEMPLATES_DIR), args.port, args.web_port)
 
 
 if __name__ == "__main__":

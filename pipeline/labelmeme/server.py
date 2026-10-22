@@ -3,18 +3,21 @@ Starlette's FileResponse answers Range requests, which the Clip step's <video> n
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
 
 from labelmeme import youtube
+from labelmeme.build import build
+from labelmeme.draft import clip_json, parse_draft, read_clip, read_draft, write_draft
 from labelmeme.job import (
-    DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, SourceFacts,
+    DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
     UnknownJob, derive_id, is_running, parse_clip, state_json,
 )
 from labelmeme.worker import Paths, Worker
@@ -36,6 +39,17 @@ class ChooseClip(BaseModel):
     title: Text
     credit: Text
     license: Text = DEFAULT_LICENSE
+
+
+class SaveSubject(BaseModel):
+    id: Slug
+    name: str
+    runs: list[dict[str, object]]
+
+
+class SaveTemplate(BaseModel):
+    title: Text
+    subjects: list[SaveSubject]
 
 
 class ApiError(Exception):
@@ -140,6 +154,40 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
     def clip_video(job_id: str) -> FileResponse:
         with jobs.with_settled(job_id, ("editing", "ready")):
             return FileResponse(paths.work_dir / job_id / "video.mp4", media_type="video/mp4")
+
+    @app.get("/api/jobs/{job_id}/draft")
+    def get_draft(job_id: str) -> dict:
+        with jobs.with_settled(job_id, ("editing", "ready")) as job:
+            work = paths.work_dir / job_id
+            clip = read_clip(work)
+            return {"draft": read_draft(work, job.state.clip.title, clip), "clip": clip_json(clip)}
+
+    @app.put("/api/jobs/{job_id}/draft", status_code=204)
+    def put_draft(job_id: str, body: dict = Body(...)) -> None:
+        with jobs.with_settled(job_id, ("editing", "ready")):
+            work = paths.work_dir / job_id
+            try:
+                draft = parse_draft(body, read_clip(work))
+            except ValueError as e:
+                raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
+            write_draft(work, draft)
+
+    @app.post("/api/jobs/{job_id}/save")
+    def save(job_id: str, body: SaveTemplate) -> dict:
+        with jobs.with_settled(job_id, ("editing", "ready")):
+            if not body.subjects:
+                raise ApiError(422, "draw at least one subject", "subjects")
+            for i, s in enumerate(body.subjects):
+                if s.name.strip() == "":
+                    raise ApiError(422, "every drawn subject needs a name", f"subjects[{i}].name")
+            subjects = [{"id": s.id, "name": s.name.strip(), "runs": s.runs} for s in body.subjects]
+            started = time.perf_counter()
+            try:
+                build(paths.work_dir / job_id, paths.templates_dir, body.title, subjects)
+            except ValueError as e:
+                raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
+            log.info("saved %s in %.2f s", job_id, time.perf_counter() - started)
+            return job_out(jobs.transition(job_id, Saved()))
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry(job_id: str) -> dict:

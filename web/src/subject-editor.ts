@@ -22,6 +22,7 @@ import { type SubjectId, type TemplateId, frameIndexAt } from "./template.ts";
 import { type Clip, type Rate, isSample, shotOf, toWireBox } from "./track.ts";
 
 const SAVE_DEBOUNCE_MS = 300;
+const TYPED_EDITS: ReadonlySet<Action["kind"]> = new Set(["retitle", "rename", "tune"]);
 const RETRY_MS = 2000;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const SPEEDS: readonly Rate[] = [0.25, 0.5, 1];
@@ -65,6 +66,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
   let runs: ReadonlyMap<SubjectId, readonly WireRun[]> = runsOf(state, clip);
   let alive = true;
   let dirty = false;
+  let queued = 0;
   let putTimer = 0;
   let inflight: Promise<void> = Promise.resolve();
   let frameRequest: number | null = null;
@@ -347,13 +349,8 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
     smoothing.value.textContent = String(state.tuning.smoothRadius);
   };
 
-  const flush = (): Promise<void> => {
-    clearTimeout(putTimer);
-    if (!dirty) return inflight;
-    dirty = false;
-    const draft: Draft = { doc: state.doc, tuning: state.tuning };
-    inflight = inflight
-      .then(() => putDraft(id, draft))
+  const send = (): Promise<void> =>
+    putDraft(id, { doc: state.doc, tuning: state.tuning })
       .then(() => {
         if (alive && !dirty) status.textContent = "";
       })
@@ -362,8 +359,26 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
         status.textContent = `Could not save the drawing: ${message(e)}`;
         if (alive) putTimer = window.setTimeout(() => void flush(), RETRY_MS);
       });
+
+  const flush = (): Promise<void> => {
+    clearTimeout(putTimer);
+    if (!dirty) return inflight;
+    dirty = false;
+    queued++;
+    inflight = inflight.then(() => {
+      queued--;
+      return send();
+    });
     return inflight;
   };
+
+  const onPageHide = () => {
+    if (!dirty && queued === 0) return;
+    clearTimeout(putTimer);
+    dirty = false;
+    void send();
+  };
+  window.addEventListener("pagehide", onPageHide);
 
   function dispatch(a: Action) {
     const prev = state;
@@ -378,7 +393,8 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
     if (state.doc !== prev.doc || state.tuning !== prev.tuning) {
       dirty = true;
       clearTimeout(putTimer);
-      putTimer = window.setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
+      if (TYPED_EDITS.has(a.kind)) putTimer = window.setTimeout(() => void flush(), SAVE_DEBOUNCE_MS);
+      else void flush();
     }
     if (state.tuning !== prev.tuning || a.kind === "undo" || a.kind === "redo") renderTuning();
     if (state.doc !== prev.doc || state.selected !== prev.selected || runs !== prevRuns) renderLanes();
@@ -569,6 +585,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
     destroy() {
       alive = false;
       void flush();
+      window.removeEventListener("pagehide", onPageHide);
       document.removeEventListener("keydown", onKey);
       document.removeEventListener("keyup", onAlt);
       if (frameRequest !== null) video.cancelVideoFrameCallback(frameRequest);

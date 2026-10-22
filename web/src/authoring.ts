@@ -211,11 +211,16 @@ const draftJson = ({ doc, tuning }: Draft) => ({ version: 1, title: doc.title, t
 
 const PROXY_UPSTREAM_DOWN = new Set([502, 503, 504]);
 
-async function request(method: string, url: string, body?: unknown): Promise<unknown> {
+// Fetch fails a keepalive request once in-flight keepalive bodies sum past 64 KiB; a page-hide write can overlap one autosave.
+const KEEPALIVE_MAX_BYTES = 32 * 1024;
+
+async function request(method: string, url: string, body?: unknown, outliveThePage = false): Promise<unknown> {
+  const text = body === undefined ? undefined : JSON.stringify(body);
   const res = await fetch(url, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: text === undefined ? {} : { "content-type": "application/json" },
+    body: text,
+    keepalive: outliveThePage && text !== undefined && new TextEncoder().encode(text).length <= KEEPALIVE_MAX_BYTES,
   }).catch((e: unknown) => {
     throw new ServerNotAnswering(`${method} ${url}: ${e instanceof Error ? e.message : String(e)}`);
   });
@@ -240,7 +245,7 @@ export const chooseClip = async (id: TemplateId, clip: Clip): Promise<Job> =>
   parseJob(await request("PUT", jobUrl(id, "/clip"), clip));
 export const getDraft = async (id: TemplateId) => parseDraftView(await request("GET", jobUrl(id, "/draft")));
 export const putDraft = async (id: TemplateId, draft: Draft): Promise<void> => {
-  await request("PUT", jobUrl(id, "/draft"), draftJson(draft));
+  await request("PUT", jobUrl(id, "/draft"), draftJson(draft), true);
 };
 export const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
 export const save = async (id: TemplateId, body: SaveBody): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/save"), body));

@@ -116,6 +116,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .author button[type="submit"] { background: var(--accent); color: #111; border: 0; font-weight: 600; }
 .author button:disabled { opacity: 0.5; }
 .author-form, .clip-form { display: grid; gap: 14px; }
+.field-hint { color: #8b949e; margin: 0; font-size: 0.9rem; }
 .field-error, .failure { color: #ff7b72; margin: 0; min-height: 1em; font-size: 0.9rem; }
 .hint { color: var(--muted); font-size: 0.9rem; margin: 4px 0; }
 .job-list ul { list-style: none; padding: 0; display: grid; gap: 6px; }

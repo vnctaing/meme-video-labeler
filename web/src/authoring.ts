@@ -238,6 +238,13 @@ const jobUrl = (id: TemplateId, rest = "") => `/api/jobs/${id}${rest}`;
 
 export const listJobs = async (): Promise<readonly Job[]> =>
   array(await request("GET", "/api/jobs"), "$").map((j, i) => parseJob(j, `$[${i}]`));
+const MAX_ID_LENGTH = 40;
+
+export function shortNameToId(name: string): string {
+  const words = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  return words.join("-").slice(0, MAX_ID_LENGTH).replace(/-+$/, "");
+}
+
 export const createJob = async (url: string, id: string | null): Promise<Job> =>
   parseJob(await request("POST", "/api/jobs", id === null ? { url } : { url, id }));
 export const getJob = async (id: TemplateId): Promise<Job> => parseJob(await request("GET", jobUrl(id)));

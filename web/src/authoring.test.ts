@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ApiError, ServerNotAnswering, getJob, parseJob } from "./authoring.ts";
+import { ApiError, ServerNotAnswering, getJob, parseJob, shortNameToId } from "./authoring.ts";
 import { TemplateError, type TemplateId } from "./template.ts";
 
 const SOURCE = {
@@ -76,5 +76,22 @@ describe("getJob when the request fails", () => {
     await expect(failure).rejects.toBeInstanceOf(ApiError);
     await expect(failure).rejects.not.toBeInstanceOf(ServerNotAnswering);
     await expect(failure).rejects.toThrow("no job named 'tos-lab'");
+  });
+});
+
+describe("shortNameToId", () => {
+  test("turns a typed name into a slug", () => {
+    expect(shortNameToId("Kakashi vs Obito")).toBe("kakashi-vs-obito");
+    expect(shortNameToId("  Pokémon: Ash & Pikachu!! ")).toBe("pokemon-ash-pikachu");
+    expect(shortNameToId("already-a-slug")).toBe("already-a-slug");
+  });
+
+  test("is empty when nothing usable was typed", () => {
+    expect(shortNameToId(" !? ")).toBe("");
+  });
+
+  test("stays within 40 characters without a trailing dash", () => {
+    const id = shortNameToId("a".repeat(39) + " bcd");
+    expect(id).toBe("a".repeat(39));
   });
 });

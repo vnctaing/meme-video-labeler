@@ -12,6 +12,7 @@ import {
   getJob,
   listJobs,
   retry,
+  shortNameToId,
   sourceUrl,
 } from "./authoring.ts";
 import { type View, el } from "./dom.ts";
@@ -34,15 +35,20 @@ function stateLabel(state: JobState): string {
 
 export async function newView(): Promise<View> {
   const urlInput = el("input", { id: "source-url", type: "url", required: true, placeholder: "https://www.youtube.com/watch?v=…", autocomplete: "off" });
-  const idInput = el("input", { id: "short-name", type: "text", placeholder: "derived from the video title", pattern: "[a-z0-9-]+", maxLength: 40, autocomplete: "off" });
+  const idInput = el("input", { id: "short-name", type: "text", placeholder: "derived from the video title", maxLength: 80, autocomplete: "off" });
   const urlError = el("p", { className: "field-error", id: "source-url-error" });
   const idError = el("p", { className: "field-error" });
+  const idHint = el("p", { className: "field-hint" });
+  idInput.addEventListener("input", () => {
+    const id = shortNameToId(idInput.value);
+    idHint.textContent = id === "" || id === idInput.value ? "" : `Saved as ${id}`;
+  });
   const submit = el("button", { type: "submit" }, "Fetch video");
   const form = el(
     "form",
     { className: "author-form" },
     el("div", { className: "field" }, el("label", { htmlFor: urlInput.id }, "YouTube link"), urlInput, urlError),
-    el("div", { className: "field" }, el("label", { htmlFor: idInput.id }, "Short name (optional)"), idInput, idError),
+    el("div", { className: "field" }, el("label", { htmlFor: idInput.id }, "Short name (optional)"), idInput, idHint, idError),
     submit,
   );
   form.addEventListener("submit", async (ev) => {
@@ -51,7 +57,7 @@ export async function newView(): Promise<View> {
     submit.disabled = true;
     submit.textContent = "Checking the video…";
     try {
-      const job = await createJob(urlInput.value, idInput.value.trim() === "" ? null : idInput.value.trim());
+      const job = await createJob(urlInput.value, shortNameToId(idInput.value) || null);
       location.hash = `#/new/${job.id}`;
     } catch (e) {
       (e instanceof ApiError && e.field === "id" ? idError : urlError).textContent = message(e);

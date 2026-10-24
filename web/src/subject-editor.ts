@@ -662,6 +662,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     if (state.stroke !== null) return;
     if (playing() === "plain") {
       video.pause();
+      renderFrame();
       return;
     }
     if (state.frame >= clip.frameCount - 1) dispatch({ kind: "seek", frame: 0 });
@@ -675,6 +676,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     if (state.stroke !== null) return;
     if (playing() === "result") {
       video.pause();
+      renderFrame();
       return;
     }
     playMode = "result";

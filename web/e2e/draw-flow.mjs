@@ -129,7 +129,8 @@ const seekTo = async (target, name) => {
   await settled();
   await page.waitForTimeout(150);
 };
-const draftPut = () => page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith(`/api/jobs/${ID}/draft`));
+const draftPut = () =>
+  page.waitForResponse((r) => r.request().method() === "PUT" && [`/api/jobs/${ID}/draft`, `/api/templates/${ID}/draft`].some((u) => r.url().endsWith(u)));
 const addSubject = async (name, button) => {
   await button.click();
   const focused = await page.evaluate(() => {
@@ -155,6 +156,7 @@ async function follow(who, { stopFrame = Infinity, onFrame = async () => {}, alt
   history.push({ wall: performance.now(), t: v.t, rate: 0 });
   await page.mouse.move(...(await client(refAt(who, v.t * FPS))));
   if (alt) await page.keyboard.down("Alt");
+  const put = draftPut();
   await page.mouse.down();
   let rateChecked = false;
   let moves = 0;
@@ -172,7 +174,6 @@ async function follow(who, { stopFrame = Infinity, onFrame = async () => {}, alt
     await page.mouse.move(...(await client(target())));
     moves++;
   }
-  const put = draftPut();
   await page.mouse.up();
   if (alt) await page.keyboard.up("Alt");
   await put;
@@ -198,6 +199,7 @@ const saveAndOpen = async () => {
   await page.waitForFunction(() => !document.querySelector("button.save")?.disabled);
   await page.locator("button.save").click();
   await page.waitForURL(new RegExp(`#/t/${ID}$`), { timeout: 60_000 });
+  for (let i = 0; i < 50 && !(await fetch(`${APP}templates/${ID}/template.json`)).headers.get("content-type")?.includes("json"); i++) await page.waitForTimeout(100);
 };
 const setSlider = async (sel, value) => {
   const put = draftPut();

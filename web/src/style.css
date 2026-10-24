@@ -161,8 +161,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .editor-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .editor-canvas { display: block; width: 100%; height: auto; border-radius: 10px; background: #000; cursor: crosshair; touch-action: none; }
 .subject-editor [hidden] { display: none !important; }
-.empty-prompt { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; border-radius: 10px; background: rgb(15 16 19 / 0.72); }
-.empty-prompt p { margin: 0; font: 600 24px system-ui, sans-serif; }
+.empty-prompt { position: absolute; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 16px; border-radius: 0 0 10px 10px; background: rgb(15 16 19 / 0.82); text-align: center; }
+.empty-prompt p { margin: 0; font: 600 20px system-ui, sans-serif; }
 .author button.add-first { height: 56px; padding: 0 28px; border-radius: 10px; border: none; background: var(--accent); color: #17181c; font: 700 18px system-ui, sans-serif; }
 .stage-banner { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); margin: 0; padding: 8px 16px; border-radius: 99px; background: rgb(15 16 19 / 0.85); font: 600 15px system-ui, sans-serif; white-space: nowrap; pointer-events: none; }
 .subject-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -198,3 +198,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .timeline-overlay { position: absolute; top: 0; bottom: 42px; left: 152px; right: 0; pointer-events: none; }
 .timeline-overlay .cut { position: absolute; top: 0; bottom: 0; width: 1px; background: #4a4d57; z-index: 1; }
 .timeline-overlay .playhead { position: absolute; top: -8px; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); z-index: 3; }
+
+.scrubber { position: relative; height: 28px; border-radius: 6px; background: #1a1b20; cursor: pointer; touch-action: none; }
+.scrubber:focus-visible { outline: 2px solid var(--accent); }
+.scrubber .cut { position: absolute; top: 0; bottom: 0; width: 1px; background: #6a6d77; }
+.scrubber .playhead { position: absolute; top: -4px; bottom: -4px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--accent); }
+.key-hints { margin: 0; font-size: 13px; color: var(--muted); }
+.key-hints kbd { margin: 0 2px 0 0; }
+.author button.play { height: 40px; padding: 0 14px; border-radius: 8px; border: none; background: var(--accent); color: #17181c; font-weight: 600; }
+.author button.play kbd { color: #4a4d57; border-color: #4a4d57; }
+.empty-prompt p.empty-how { font: 400 15px system-ui, sans-serif; color: var(--muted); }

@@ -121,8 +121,9 @@ const settled = () =>
     return v !== null && !v.seeking && v.readyState >= 2;
   });
 const seekTo = async (target, name) => {
-  const box = await (await laneOf(name)).locator(".lane-track").boundingBox();
-  await page.mouse.click(box.x + (box.width * (target + 0.5)) / FRAMES, box.y + 4);
+  await (await laneOf(name)).locator(".lane-track").click();
+  const box = await page.locator(".scrubber").boundingBox();
+  await page.mouse.click(box.x + (box.width * (target + 0.5)) / FRAMES, box.y + box.height / 2);
   for (let i = 0; i < 20 && (await frame()) !== target; i++) await page.keyboard.press((await frame()) < target ? "ArrowRight" : "ArrowLeft");
   assert((await frame()) === target, `${name} at frame ${target}`);
   await settled();
@@ -216,7 +217,7 @@ try {
   await page.getByLabel("Title").fill(TITLE);
   await shot("clip");
   await page.getByRole("button", { name: "Use this clip" }).click();
-  await page.getByText("Add the first thing to label").waitFor({ timeout: 180_000 });
+  await page.getByText("Move to the frame where your first subject appears").waitFor({ timeout: 180_000 });
 
   const work = path.join(PIPELINE, "work", ID);
   assert(JSON.parse(readFileSync(path.join(work, "video.json"), "utf8")).frameCount === FRAMES, `video.json has frameCount ${FRAMES}`);
@@ -228,7 +229,7 @@ try {
   assert(psnr >= 25, `the drawn clip matches the tos-lab clip, average PSNR ${psnr} dB >= 25`);
 
   await page.waitForFunction(() => Number(document.querySelector("canvas.editor-canvas")?.dataset.frame) === 0);
-  assert(await page.getByText("Add the first thing to label").isVisible(), "the empty state asks for the first subject");
+  assert(await page.getByText("Move to the frame where your first subject appears").isVisible(), "the empty state asks for the first subject");
   await shot("empty");
 
   await addSubject(BARLEY.name, page.locator(".empty-prompt button.add-first"));
@@ -355,9 +356,9 @@ try {
   assert((await videoState()).rate === 1, "Play result plays at 1x");
   assert((await page.locator(".stage-banner").textContent()) === "Playing the result", "the banner reads Playing the result");
   await shot("play-result");
-  await page.keyboard.press(" ");
+  await page.keyboard.press("r");
   await page.waitForFunction(() => document.querySelector("video.editor-video")?.paused);
-  assert((await page.locator(".stage").getAttribute("data-mode")) !== "playing", "Space stops Play result");
+  assert((await page.locator(".stage").getAttribute("data-mode")) !== "playing", "R stops Play result");
 
   await saveAndOpen();
   const on = savedTemplate();

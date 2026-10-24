@@ -28,6 +28,19 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const SPEEDS: readonly Rate[] = [0.25, 0.5, 1];
 const DEFAULT_SPEED: Rate = 0.5;
 
+type Playback = "off" | "plain" | "result";
+
+type Command = "play" | "playResult" | "stepBack" | "stepForward" | "erase" | "smaller" | "bigger";
+
+const SHORTCUTS: readonly { readonly hint: string; readonly label: string; readonly keys: Readonly<Record<string, Command>> }[] = [
+  { hint: "Space", label: "play / pause", keys: { " ": "play" } },
+  { hint: "← →", label: "step a frame", keys: { ArrowLeft: "stepBack", ArrowRight: "stepForward" } },
+  { hint: "R", label: "play result", keys: { r: "playResult", R: "playResult" } },
+  { hint: "E", label: "erase", keys: { e: "erase", E: "erase" } },
+  { hint: "− +", label: "size", keys: { "-": "smaller", "+": "bigger", "=": "bigger" } },
+];
+const COMMAND_OF: ReadonlyMap<string, Command> = new Map(SHORTCUTS.flatMap((s) => Object.entries(s.keys)));
+
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function icon(path: string): SVGSVGElement {
@@ -71,7 +84,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   let putTimer = 0;
   let inflight: Promise<void> = Promise.resolve();
   let frameRequest: number | null = null;
-  let playing = false;
+  let playback: Playback = "off";
   let eraseToggle = false;
   let altHeld = false;
   let pointer: readonly [number, number] | null = null;
@@ -99,8 +112,10 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   const canvas = el("canvas", { className: "editor-canvas", width: clip.width, height: clip.height });
   const ctx = canvas.getContext("2d");
   if (ctx === null) throw new Error("2D canvas is not available");
-  const playLabel = el("span", {}, "Play result");
-  const playButton = el("button", { type: "button", className: "play-result", ariaKeyShortcuts: "Space" }, playLabel, " ", el("kbd", {}, "Space"));
+  const playLabel = el("span", {}, "Play");
+  const playButton = el("button", { type: "button", className: "play", ariaKeyShortcuts: "Space" }, playLabel, " ", el("kbd", {}, "Space"));
+  const resultLabel = el("span", {}, "Play result");
+  const resultButton = el("button", { type: "button", className: "play-result", ariaKeyShortcuts: "R" }, resultLabel, " ", el("kbd", {}, "R"));
   const speed = el(
     "select",
     { id: "speed", className: "speed" },
@@ -113,9 +128,38 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   const status = el("p", { className: "editor-status", role: "status" });
   const notice = el("p", { className: "editor-notice", role: "status" });
   const emptyAdd = el("button", { type: "button", className: "add-first" }, "+ Add subject");
-  const emptyPrompt = el("div", { className: "empty-prompt" }, el("p", {}, "Add the first thing to label"), emptyAdd);
+  const emptyPrompt = el(
+    "div",
+    { className: "empty-prompt" },
+    el("p", {}, "Move to the frame where your first subject appears, then add it"),
+    el("p", { className: "empty-how" }, "Press Space to play and pause, or drag the timeline under the video."),
+    emptyAdd,
+  );
   const banner = el("p", { className: "stage-banner", role: "status" });
   const stage = el("div", { className: "stage" }, video, canvas, emptyPrompt, banner);
+  const scrubHead = el("div", { className: "playhead" });
+  const scrubber = el("div", {
+    className: "scrubber",
+    role: "slider",
+    tabIndex: 0,
+    ariaLabel: "Timeline",
+    ariaValueMin: "0",
+    ariaValueMax: String(clip.frameCount - 1),
+  });
+  scrubber.append(
+    ...clip.cuts.map((c) => {
+      const line = el("div", { className: "cut" });
+      line.style.left = pct(c);
+      return line;
+    }),
+    scrubHead,
+  );
+  const keyHints = el(
+    "p",
+    { className: "key-hints" },
+    ...SHORTCUTS.flatMap((x) => [el("kbd", {}, x.hint), ` ${x.label} · `]),
+    `hold ${touchOnly ? "your finger" : "the mouse"} on the video to draw`,
+  );
   const actionsName = el("strong", { className: "actions-name" });
   const eraseButton = shortcutButton("Erase", "Alt", "Alt E", "action erase");
   const smallerButton = shortcutButton("Size −", "-", "-", "action smaller");
@@ -141,7 +185,9 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   container.append(
     bar,
     stage,
-    el("div", { className: "transport" }, playButton, el("label", { className: "slider", htmlFor: speed.id }, "Speed", speed), timecode, lag.field, smoothing.field),
+    scrubber,
+    keyHints,
+    el("div", { className: "transport" }, playButton, resultButton, el("label", { className: "slider", htmlFor: speed.id }, "Speed", speed), timecode, lag.field, smoothing.field),
     actions,
     hint,
     status,
@@ -200,7 +246,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   const paint = () => {
     const t = toTemplate(runs, state, clip, id, videoUrl);
     paintFrame(ctx, (c) => c.drawImage(video, 0, 0, clip.width, clip.height), t, labelsOf(state.doc), state.frame);
-    if (!playing) {
+    if (playback !== "result") {
       strokePaths();
       const s = selectedDoc();
       if (s !== null && pointer !== null) cursorLabel(s, pointer);
@@ -215,7 +261,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   };
 
   const renderMode = () => {
-    const mode = modeOf(state, clip, { playing, erasing: erasing() });
+    const mode = modeOf(state, clip, { playing: playback === "result", erasing: erasing() });
     stage.dataset.mode = mode.kind;
     emptyPrompt.hidden = mode.kind !== "empty";
     actions.hidden = mode.kind === "empty";
@@ -226,6 +272,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
         break;
       case "follow":
         banner.replaceChildren(`Hold ${touchOnly ? "your finger" : "the mouse"} on `, coloured(displayName(mode.subject), mode.subject.color), " and follow it");
+        hint.textContent = "Not on screen yet? Press Space or drag the timeline to where it appears.";
         break;
       case "recording":
         banner.replaceChildren(
@@ -260,7 +307,8 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     const blocker = saveBlocker(state, runs);
     saveButton.disabled = blocker !== null;
     saveButton.title = blocker ?? "Write the template and open it";
-    playLabel.textContent = playing ? "Pause" : "Play result";
+    playLabel.textContent = playback === "plain" ? "Pause" : "Play";
+    resultLabel.textContent = playback === "result" ? "Pause" : "Play result";
   };
 
   const renderFrame = () => {
@@ -268,6 +316,9 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     renderMode();
     timecode.replaceChildren(clock(state.frame / clip.fps), el("span", { className: "muted" }, ` / ${clock(clip.frameCount / clip.fps)}`));
     playhead.style.left = pct(state.frame + 0.5);
+    scrubHead.style.left = pct(state.frame + 0.5);
+    scrubber.ariaValueNow = String(state.frame);
+    scrubber.ariaValueText = `frame ${state.frame}`;
   };
 
   const showNotice = (text: string) => {
@@ -278,8 +329,8 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
 
   const laneNodes = new Map<SubjectId, { lane: HTMLElement; name: HTMLInputElement; track: HTMLElement }>();
 
-  const seekFromPointer = (track: HTMLElement, ev: PointerEvent) => {
-    const rect = track.getBoundingClientRect();
+  const seekFromPointer = (ev: PointerEvent) => {
+    const rect = scrubber.getBoundingClientRect();
     dispatch({ kind: "seek", frame: Math.floor(((ev.clientX - rect.left) / rect.width) * clip.frameCount) });
   };
 
@@ -293,16 +344,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
       if (ev.key === "Enter") name.blur();
     });
     const track = el("div", { className: "lane-track" });
-    track.addEventListener("pointerdown", (ev) => {
-      if (state.stroke !== null) return;
-      track.setPointerCapture(ev.pointerId);
-      video.pause();
-      dispatch({ kind: "select", id: s.id });
-      seekFromPointer(track, ev);
-    });
-    track.addEventListener("pointermove", (ev) => {
-      if (track.hasPointerCapture(ev.pointerId)) seekFromPointer(track, ev);
-    });
+    track.addEventListener("pointerdown", () => dispatch({ kind: "select", id: s.id }));
     const lane = el("div", { className: "lane" }, el("label", { htmlFor: name.id, className: "visually-hidden" }, `Subject ${index + 1} name`), name, track);
     lane.dataset.subject = s.id;
     const nodes = { lane, name, track };
@@ -415,9 +457,19 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   const currentSpeed = (): Rate => SPEEDS.find((r) => String(r) === speed.value) ?? DEFAULT_SPEED;
 
   const stopPlaying = () => {
-    playing = false;
+    playback = "off";
     video.pause();
   };
+
+  scrubber.addEventListener("pointerdown", (ev) => {
+    if (state.stroke !== null) return;
+    stopPlaying();
+    scrubber.setPointerCapture(ev.pointerId);
+    seekFromPointer(ev);
+  });
+  scrubber.addEventListener("pointermove", (ev) => {
+    if (state.stroke === null && scrubber.hasPointerCapture(ev.pointerId)) seekFromPointer(ev);
+  });
 
   const endStroke = () => {
     if (state.stroke === null) return;
@@ -438,20 +490,20 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   video.addEventListener("loadeddata", paint);
   video.addEventListener("seeked", paint);
   video.addEventListener("pause", () => {
-    if (!playing) return;
-    playing = false;
+    if (playback === "off") return;
+    playback = "off";
     renderFrame();
   });
   video.addEventListener("ended", () => {
     endStroke();
-    playing = false;
+    playback = "off";
     renderFrame();
   });
 
   canvas.addEventListener("pointerdown", (ev) => {
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
     ev.preventDefault();
-    if (playing) stopPlaying();
+    if (playback !== "off") stopPlaying();
     if (state.selected === null || state.stroke !== null || state.frame >= clip.frameCount - 1) return;
     canvas.setPointerCapture(ev.pointerId);
     pointer = toTemplatePx(ev);
@@ -485,20 +537,37 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     { passive: false },
   );
 
-  const togglePlayResult = () => {
+  const togglePlay = () => {
     if (state.stroke !== null) return;
-    if (playing) {
+    if (playback === "plain") {
       stopPlaying();
       renderFrame();
       return;
     }
-    playing = true;
+    stopPlaying();
+    if (state.frame >= clip.frameCount - 1) dispatch({ kind: "seek", frame: 0 });
+    playback = "plain";
+    video.playbackRate = 1;
+    void video.play();
+    renderFrame();
+  };
+
+  const togglePlayResult = () => {
+    if (state.stroke !== null) return;
+    if (playback === "result") {
+      stopPlaying();
+      renderFrame();
+      return;
+    }
+    stopPlaying();
+    playback = "result";
     video.playbackRate = 1;
     video.currentTime = 0;
     dispatch({ kind: "seek", frame: 0 });
     void video.play();
   };
-  playButton.addEventListener("click", togglePlayResult);
+  playButton.addEventListener("click", togglePlay);
+  resultButton.addEventListener("click", togglePlayResult);
   speed.addEventListener("change", () => speed.blur());
   lag.input.addEventListener("input", () => dispatch({ kind: "tune", tuning: { lagMs: Number(lag.input.value) } }));
   smoothing.input.addEventListener("input", () => dispatch({ kind: "tune", tuning: { smoothRadius: Number(smoothing.input.value) } }));
@@ -532,6 +601,33 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     altHeld = ev.type === "keydown";
     renderFrame();
   };
+  const run = (command: Command) => {
+    switch (command) {
+      case "play":
+        togglePlay();
+        return;
+      case "playResult":
+        togglePlayResult();
+        return;
+      case "stepBack":
+      case "stepForward":
+        if (state.stroke !== null) return;
+        stopPlaying();
+        dispatch({ kind: "step", delta: command === "stepBack" ? -1 : 1 });
+        return;
+      case "erase":
+        toggleErase();
+        return;
+      case "smaller":
+      case "bigger":
+        dispatch({ kind: "resize", steps: command === "smaller" ? -1 : 1 });
+        return;
+      default: {
+        const _exhaustive: never = command;
+        return _exhaustive;
+      }
+    }
+  };
   const onKey = (ev: KeyboardEvent) => {
     onAlt(ev);
     const target = ev.target as HTMLElement | null;
@@ -541,28 +637,11 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
       dispatch({ kind: ev.shiftKey ? "redo" : "undo" });
       return;
     }
-    switch (ev.key) {
-      case " ":
-        ev.preventDefault();
-        togglePlayResult();
-        return;
-      case "ArrowLeft":
-      case "ArrowRight":
-        if (state.stroke !== null) return;
-        ev.preventDefault();
-        stopPlaying();
-        dispatch({ kind: "step", delta: ev.key === "ArrowLeft" ? -1 : 1 });
-        return;
-      case "+":
-      case "=":
-      case "-":
-        dispatch({ kind: "resize", steps: ev.key === "-" ? -1 : 1 });
-        return;
-      case "e":
-      case "E":
-        toggleErase();
-        return;
-    }
+    if (ev.metaKey || ev.ctrlKey) return;
+    const command = COMMAND_OF.get(ev.key);
+    if (command === undefined) return;
+    ev.preventDefault();
+    run(command);
   };
   document.addEventListener("keydown", onKey);
   document.addEventListener("keyup", onAlt);

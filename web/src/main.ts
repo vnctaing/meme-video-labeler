@@ -5,7 +5,12 @@ import { loadLabelFont } from "./labels.ts";
 import { mountPreview } from "./preview.ts";
 import { type IndexEntry, type SubjectId, type TemplateId, loadIndex, loadTemplate } from "./template.ts";
 
-type Route = { kind: "gallery" } | { kind: "editor"; id: string } | { kind: "new" } | { kind: "job"; id: TemplateId };
+type Route =
+  | { kind: "gallery" }
+  | { kind: "editor"; id: string }
+  | { kind: "new" }
+  | { kind: "job"; id: TemplateId }
+  | { kind: "edit"; id: TemplateId };
 
 const AUTHORING = import.meta.env.VITE_AUTHOR === "1";
 
@@ -24,6 +29,8 @@ function parseRoute(hash: string): Route {
   if (m !== null) return { kind: "editor", id: m[1] };
   if (!AUTHORING) return { kind: "gallery" };
   if (hash === "#/new") return { kind: "new" };
+  const edit = /^#\/edit\/([a-z0-9-]+)$/.exec(hash);
+  if (edit !== null) return { kind: "edit", id: edit[1] as TemplateId };
   const job = /^#\/new\/([a-z0-9-]+)$/.exec(hash);
   return job === null ? { kind: "gallery" } : { kind: "job", id: job[1] as TemplateId };
 }
@@ -38,6 +45,8 @@ async function routeView(route: Route): Promise<View> {
       return AUTHORING ? (await import("./author.ts")).newView() : galleryView();
     case "job":
       return AUTHORING ? (await import("./author.ts")).jobView(route.id) : galleryView();
+    case "edit":
+      return AUTHORING ? (await import("./author.ts")).editTemplateView(route.id) : galleryView();
     default: {
       const _exhaustive: never = route;
       return _exhaustive;
@@ -55,12 +64,17 @@ function subjectCount(n: number): string {
 
 function galleryCard(t: IndexEntry): HTMLElement {
   return el(
-    "a",
-    { className: "card", href: `#/t/${t.id}` },
-    el("img", { src: t.thumbUrl, alt: "", width: t.width, height: t.height, loading: "lazy" }),
-    el("h2", {}, t.title),
-    el("p", { className: "credit" }, t.credit),
-    el("p", { className: "meta" }, `${formatDuration(t.frameCount, t.fps)} · ${subjectCount(t.subjectCount)}`),
+    "article",
+    { className: "card" },
+    el(
+      "a",
+      { className: "card-link", href: `#/t/${t.id}` },
+      el("img", { src: t.thumbUrl, alt: "", width: t.width, height: t.height, loading: "lazy" }),
+      el("h2", {}, t.title),
+      el("p", { className: "credit" }, t.credit),
+      el("p", { className: "meta" }, `${formatDuration(t.frameCount, t.fps)} · ${subjectCount(t.subjectCount)}`),
+    ),
+    ...(AUTHORING ? [el("a", { className: "card-edit", href: `#/edit/${t.id}`, title: `Edit ${t.title}` }, "Edit")] : []),
   );
 }
 

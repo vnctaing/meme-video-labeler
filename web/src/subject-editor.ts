@@ -1,4 +1,4 @@
-import { clipUrl, putDraft, save } from "./authoring.ts";
+import type { EditSession } from "./authoring.ts";
 import { el } from "./dom.ts";
 import { drawLabel, layoutLabel, loadLabelFont, measureOn, paintFrame } from "./labels.ts";
 import type { WireRun } from "./schema.ts";
@@ -18,7 +18,7 @@ import {
   saveBody,
   toTemplate,
 } from "./subjects.ts";
-import { type SubjectId, type TemplateId, frameIndexAt } from "./template.ts";
+import { type SubjectId, frameIndexAt } from "./template.ts";
 import { type Clip, type Rate, anchorOf, isPlaced, shotOf, toWireBox } from "./track.ts";
 
 const SAVE_DEBOUNCE_MS = 300;
@@ -60,7 +60,8 @@ function slider(id: string, label: string, max: number, step: number): { field: 
   return { field: el("label", { className: "slider", htmlFor: id }, label, input, value), input, value };
 }
 
-export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initial: { readonly draft: Draft; readonly clip: Clip }): { destroy(): void } {
+export function mountSubjectEditor(container: HTMLElement, session: EditSession, initial: { readonly draft: Draft; readonly clip: Clip }): { destroy(): void } {
+  const { id, videoUrl } = session;
   const clip = initial.clip;
   let state: EditorState = editorState(initial.draft);
   let runs: ReadonlyMap<SubjectId, readonly WireRun[]> = runsOf(state, clip);
@@ -86,7 +87,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
   const bar = el(
     "header",
     { className: "editor-bar" },
-    el("a", { className: "back-icon", href: "#/new", ariaLabel: "Back to templates" }, icon("M15 18l-6-6 6-6")),
+    el("a", { className: "back-icon", href: session.backHref, ariaLabel: "Back to templates" }, icon("M15 18l-6-6 6-6")),
     el("label", { htmlFor: titleInput.id, className: "visually-hidden" }, "Template title"),
     titleInput,
     undoButton,
@@ -94,7 +95,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
     saveButton,
   );
 
-  const video = el("video", { className: "editor-video", src: clipUrl(id), preload: "auto", playsInline: true });
+  const video = el("video", { className: "editor-video", src: videoUrl, preload: "auto", playsInline: true });
   const canvas = el("canvas", { className: "editor-canvas", width: clip.width, height: clip.height });
   const ctx = canvas.getContext("2d");
   if (ctx === null) throw new Error("2D canvas is not available");
@@ -197,7 +198,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
   };
 
   const paint = () => {
-    const t = toTemplate(runs, state, clip, id, clipUrl(id));
+    const t = toTemplate(runs, state, clip, id, videoUrl);
     paintFrame(ctx, (c) => c.drawImage(video, 0, 0, clip.width, clip.height), t, labelsOf(state.doc), state.frame);
     if (!playing) {
       strokePaths();
@@ -351,7 +352,8 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
   };
 
   const send = (): Promise<void> =>
-    putDraft(id, { doc: state.doc, tuning: state.tuning })
+    session
+      .putDraft({ doc: state.doc, tuning: state.tuning })
       .then(() => {
         if (alive && !dirty) status.textContent = "";
       })
@@ -569,7 +571,7 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
     saveButton.disabled = true;
     await flush();
     try {
-      await save(id, saveBody(state, runs));
+      await session.save(saveBody(state, runs));
       location.hash = `#/t/${id}`;
     } catch (e) {
       status.textContent = message(e);

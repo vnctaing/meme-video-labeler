@@ -1,5 +1,5 @@
-import type { Draft, SaveBody, SubjectDraft } from "./subjects.ts";
-import { type SubjectId, type TemplateId, TemplateError, array, int, isRecord, parseBox, record, slug, string } from "./template.ts";
+import { type Draft, type SaveBody, type SubjectDraft, importDraft } from "./subjects.ts";
+import { type SubjectId, type Template, type TemplateId, TemplateError, array, int, isRecord, loadTemplate, parseBox, record, slug, string } from "./template.ts";
 import { type Cell, type Clip as ClipFacts, HIDDEN, type Rate } from "./track.ts";
 
 export interface SourceFacts {
@@ -199,18 +199,25 @@ function parseClipFacts(v: unknown, path: string): ClipFacts {
   };
 }
 
+function parseDraft(v: unknown, clip: ClipFacts): Draft {
+  const d = record(v, "$.draft");
+  const t = record(d.tuning, "$.draft.tuning");
+  return {
+    doc: { title: string(d.title, "$.draft.title"), subjects: array(d.subjects, "$.draft.subjects").map((s, i) => parseSubjectDraft(s, `$.draft.subjects[${i}]`, clip)) },
+    tuning: { lagMs: int(t.lagMs, "$.draft.tuning.lagMs", 0), smoothRadius: int(t.smoothRadius, "$.draft.tuning.smoothRadius", 0) },
+  };
+}
+
 export function parseDraftView(json: unknown): { readonly draft: Draft; readonly clip: ClipFacts } {
   const o = record(json, "$");
   const clip = parseClipFacts(o.clip, "$.clip");
-  const d = record(o.draft, "$.draft");
-  const t = record(d.tuning, "$.draft.tuning");
-  return {
-    clip,
-    draft: {
-      doc: { title: string(d.title, "$.draft.title"), subjects: array(d.subjects, "$.draft.subjects").map((s, i) => parseSubjectDraft(s, `$.draft.subjects[${i}]`, clip)) },
-      tuning: { lagMs: int(t.lagMs, "$.draft.tuning.lagMs", 0), smoothRadius: int(t.smoothRadius, "$.draft.tuning.smoothRadius", 0) },
-    },
-  };
+  return { clip, draft: parseDraft(o.draft, clip) };
+}
+
+export function parseTemplateDraftView(json: unknown): { readonly draft: Draft | null; readonly clip: ClipFacts } {
+  const o = record(json, "$");
+  const clip = parseClipFacts(o.clip, "$.clip");
+  return { clip, draft: o.draft === null ? null : parseDraft(o.draft, clip) };
 }
 
 const draftJson = ({ doc, tuning }: Draft) => ({ version: 1, title: doc.title, tuning, subjects: doc.subjects });
@@ -260,7 +267,49 @@ export const getDraft = async (id: TemplateId) => parseDraftView(await request("
 export const putDraft = async (id: TemplateId, draft: Draft): Promise<void> => {
   await request("PUT", jobUrl(id, "/draft"), draftJson(draft), true);
 };
-export const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
-export const save = async (id: TemplateId, body: SaveBody): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/save"), body));
+const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
 export const retry = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/retry")));
 export const sourceUrl = (id: TemplateId): string => jobUrl(id, "/source.mp4");
+
+export interface EditSession {
+  readonly id: TemplateId;
+  readonly videoUrl: string;
+  readonly backHref: string;
+  putDraft(draft: Draft): Promise<void>;
+  save(body: SaveBody): Promise<void>;
+}
+
+export const jobSession = (id: TemplateId): EditSession => ({
+  id,
+  videoUrl: clipUrl(id),
+  backHref: "#/new",
+  putDraft: (draft) => putDraft(id, draft),
+  save: async (body) => {
+    parseJob(await request("POST", jobUrl(id, "/save"), body));
+  },
+});
+
+const templateUrl = (id: TemplateId, rest: string) => `/api/templates/${id}${rest}`;
+
+export const templateSession = (id: TemplateId, videoUrl: string): EditSession => ({
+  id,
+  videoUrl,
+  backHref: "#/",
+  putDraft: async (draft) => {
+    await request("PUT", templateUrl(id, "/draft"), draftJson(draft), true);
+  },
+  save: async (body) => {
+    await request("POST", templateUrl(id, "/save"), body);
+  },
+});
+
+export interface OpenedEdit {
+  readonly draft: Draft;
+  readonly clip: ClipFacts;
+  readonly template: Template;
+}
+
+export async function openTemplateEdit(id: TemplateId, baseUrl: string): Promise<OpenedEdit> {
+  const [template, view] = await Promise.all([loadTemplate(id, baseUrl), request("GET", templateUrl(id, "/draft")).then(parseTemplateDraftView)]);
+  return { template, clip: view.clip, draft: view.draft ?? importDraft(template) };
+}

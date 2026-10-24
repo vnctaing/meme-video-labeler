@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from labelmeme.draft import ClipFacts, parse_draft
 from labelmeme.schema import SLUG, WireSubject, WireTemplate, validate_template, write_template
+
+log = logging.getLogger(__name__)
 
 
 class UnknownTemplate(KeyError):
@@ -25,7 +29,13 @@ def read_draft_if_any(work: Path, clip: ClipFacts) -> dict | None:
     path = work / "draft.json"
     if not path.is_file():
         return None
-    return parse_draft(json.loads(path.read_text(encoding="utf-8")), clip)
+    try:
+        return parse_draft(json.loads(path.read_text(encoding="utf-8")), clip)
+    except ValueError as e:
+        aside = path.with_name(f"draft.corrupt-{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json")
+        path.rename(aside)
+        log.warning("moved a draft that cannot be read to %s: %s", aside, e)
+        return None
 
 
 def save_in_place(templates_dir: Path, template: WireTemplate, title: str, subjects: list[WireSubject]) -> WireTemplate:

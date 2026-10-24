@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from labelmeme.cuts import read_cuts
-from labelmeme.job import write_atomic
 from labelmeme.prep import read_facts
-from labelmeme.schema import SLUG
+from labelmeme.schema import SLUG, write_atomic
 
 DEFAULT_TUNING = {"lagMs": 150, "smoothRadius": 4}
 RATES = (0.25, 0.5, 1)

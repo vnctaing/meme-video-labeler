@@ -140,3 +140,13 @@ def test_a_new_clip_removes_the_draft(tmp_path: Path, monkeypatch: pytest.Monkey
             time.sleep(0.02)
         assert client.get("/api/jobs/job").json()["state"]["kind"] == "editing"
         assert client.get("/api/jobs/job/draft").json()["draft"]["subjects"] == []
+
+
+@pytest.mark.parametrize("runs", [[{"boxes": [[1, 1, 2, 2]]}], [{"from": 0, "boxes": 5}], [{"from": 0, "boxes": [7]}]])
+def test_save_with_malformed_runs_is_refused(tmp_path: Path, runs: list) -> None:
+    paths = _paths(tmp_path)
+    with TestClient(create_app(paths, 5184), raise_server_exceptions=False) as client:
+        res = _save(client, [{"id": "s1", "name": "Thom", "runs": runs}])
+    assert res.status_code == 422, res.text
+    assert res.json()["field"].startswith("$.subjects[0].runs[0]")
+    assert not (paths.templates_dir / "job").exists()

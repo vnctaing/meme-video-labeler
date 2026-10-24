@@ -144,3 +144,33 @@ describe("modeOf and save", () => {
     expect(saveBlocker(untitled, runsOf(untitled, CLIP))).toBe("Give the template a title first");
   });
 });
+
+describe("a subject with imported frames", () => {
+  const box = (f: number): Cell => ({ box: [400 + f, 50, 357, 400] });
+  const imported = (from = 100, to = 200) => {
+    const t = blank();
+    for (let f = from; f < to; f++) t[f] = box(f);
+    return t;
+  };
+
+  test("the brush starts at the size the renderer gives the nearest box", () => {
+    expect(brushSize(start([subject(1, imported())], 150), id("s1"), CLIP)).toBeCloseTo(0.11 * 534, 9);
+    const narrow = blank();
+    narrow[100] = { box: [0, 0, 100, 1] };
+    expect(brushSize(start([subject(1, narrow)], 120), id("s1"), CLIP)).toBeCloseTo(28, 9);
+  });
+
+  test("a subject shown only by imported boxes is paused, not waiting to be followed", () => {
+    expect(modeOf(start([subject(1, imported())], 150), CLIP, { playing: false, erasing: false }).kind).toBe("paused");
+  });
+
+  test("drawing over imported frames replaces only those frames, and undo brings the boxes back", () => {
+    const before = start([subject(1, imported())]);
+    const drawn = run(before, ...stroke(140, 160));
+    expect(track(drawn).slice(138, 163).map((c) => (Array.isArray(c) ? "D" : c === null ? c : "I"))).toEqual([
+      "I", "I", ...Array(21).fill("D"), "I", "I",
+    ]);
+    expect(track(drawn)[139]).toBe(track(before)[139]);
+    expect(track(run(drawn, { kind: "undo" }))).toBe(track(before));
+  });
+});

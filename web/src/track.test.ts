@@ -1,16 +1,20 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { type Measure, layoutLabel } from "./labels.ts";
-import { parseTemplate } from "./template.ts";
+import { importDraft } from "./subjects.ts";
+import { type Template, parseTemplate } from "./template.ts";
 import {
   type Cell,
   type Clip,
   HIDDEN,
+  type Imported,
   type Rate,
   type Sample,
   type Track,
   bridge,
+  anchorOf,
   compensateLag,
+  drawnSpans,
   lagFrames,
   processTrack,
   shotsOf,
@@ -266,5 +270,90 @@ describe("toWireBox", () => {
     };
     expect(font(500)).toBeCloseTo(0.11 * TOS.height, 0);
     expect(font(1)).toBeCloseTo(0.04 * TOS.height, 0);
+  });
+});
+
+const shipped = (id: string): Template =>
+  parseTemplate(JSON.parse(readFileSync(new URL(`../public/templates/${id}/template.json`, import.meta.url), "utf8")), "http://x/");
+const clipOf = (t: Template): Clip => ({ width: t.width, height: t.height, fps: t.fps, frameCount: t.frameCount, cuts: [...t.cuts] });
+const boxesOf = (t: Template) => t.subjects.map((s) => s.runs.map((r) => ({ from: r.from, boxes: r.boxes.map(({ x, y, w, h }) => [x, y, w, h]) })));
+
+describe("an imported template", () => {
+  test.each(["fixture", "tos-lab", "tos-robot"])("%s comes back with the same runs at every tuning", (id) => {
+    const t = shipped(id);
+    const draft = importDraft(t);
+    for (const tuning of [{ lagMs: 150, smoothRadius: 4 }, { lagMs: 400, smoothRadius: 12 }, { lagMs: 0, smoothRadius: 0 }]) {
+      const runs = draft.doc.subjects.map((s) => toRuns(processTrack(s.track, clipOf(t), tuning), clipOf(t)));
+      expect(runs).toEqual(boxesOf(t));
+    }
+  });
+
+  const box = (f: number): Imported => ({ box: [f, 10, 100, 200] });
+  const mixed = () => {
+    const track = empty(40);
+    for (let f = 0; f < 10; f++) track[f] = box(f);
+    for (let f = 10; f < 20; f++) track[f] = at(f);
+    for (let f = 20; f < 30; f++) track[f] = box(f);
+    return track;
+  };
+  const clip40: Clip = { ...TOS, frameCount: 40, cuts: [] };
+  const label = (c: Cell) => (c === null || c === HIDDEN ? c : Array.isArray(c) ? `D${c[0]}` : `I${(c as Imported).box[0]}`);
+
+  test("lag shifts a redrawn stretch between imported frames without moving them", () => {
+    const track = mixed();
+    const out = processTrack(track, clip40, { lagMs: 150, smoothRadius: 0 });
+    expect(out.slice(0, 30).map(label)).toEqual([
+      ...Array.from({ length: 10 }, (_, f) => `I${f}`),
+      "D14", "D15", "D16", "D17", "D18", "D19", "D19", "D19", "D19", "D19",
+      ...Array.from({ length: 10 }, (_, f) => `I${20 + f}`),
+    ]);
+    for (const f of [...Array(10).keys(), ...Array.from({ length: 10 }, (_, i) => 20 + i)]) expect(out[f]).toBe(track[f]);
+  });
+
+  test("the spans are the shots split at every imported frame", () => {
+    const track = empty();
+    track[5] = box(5);
+    track[6] = box(6);
+    track[300] = box(300);
+    expect(drawnSpans(track, SHOTS)).toEqual([
+      { from: 0, to: 5 },
+      { from: 7, to: 228 },
+      { from: 228, to: 300 },
+      { from: 301, to: 326 },
+      { from: 326, to: 466 },
+    ]);
+  });
+
+  test("smoothing never averages an imported box into a drawn sample", () => {
+    const track = empty(40);
+    for (let f = 0; f < 20; f++) track[f] = [f < 10 ? 0 : 1000, 0, 40, 1];
+    track[10] = { box: [500, 0, 100, 100] };
+    const out = processTrack(track, clip40, { lagMs: 0, smoothRadius: 4 });
+    expect(out[9]).toEqual([0, 0, 40, 1]);
+    expect(out[11]).toEqual([1000, 0, 40, 1]);
+  });
+
+  test("a one-frame hole between a drawn sample and an imported box stays a hole", () => {
+    const track = empty(40);
+    track[9] = at(9);
+    track[11] = box(11);
+    track[12] = box(12);
+    expect(processTrack(track, clip40, { lagMs: 0, smoothRadius: 0 })[10]).toBeNull();
+  });
+
+  test("the pointer anchor of an imported box is its top centre at the size the renderer draws", () => {
+    for (const [x, y, w, h] of [[64, 34, 357, 495], [0, 0, 100, 1], [600, 300, 10, 1]] as const) {
+      const drawnAt = layoutLabel(measure, "BOB", { x, y, w, h }, TOS.width, TOS.height);
+      expect(anchorOf({ box: [x, y, w, h] }, TOS)).toEqual([drawnAt.centerX, y, drawnAt.fontPx]);
+    }
+    expect(anchorOf([10, 20, 30, 1], TOS)).toEqual([10, 20, 30]);
+  });
+});
+
+describe("a drawn draft with nothing imported", () => {
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/drawn-draft.json", import.meta.url), "utf8"));
+
+  test("still gives the runs its template was saved with", () => {
+    expect(toRuns(processTrack(fixture.track, fixture.clip, fixture.tuning), fixture.clip)).toEqual(fixture.runs);
   });
 });

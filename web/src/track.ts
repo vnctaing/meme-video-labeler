@@ -125,11 +125,32 @@ export function bridge(track: Track, shots: readonly Shot[], maxGap: number): Tr
   return out;
 }
 
-export function processTrack(track: Track, clip: Clip, tuning: Tuning): Track {
-  const shots = shotsOf(clip);
-  const shifted = compensateLag(track, shots, { lagMs: tuning.lagMs, fps: clip.fps });
-  return bridge(smooth(shifted, shots, tuning.smoothRadius), shots, BRIDGE_FRAMES);
+export function drawnSpans(track: Track, shots: readonly Shot[]): readonly Shot[] {
+  const spans: Shot[] = [];
+  for (const { from, to } of shots) {
+    let start = from;
+    for (let f = from; f <= to; f++) {
+      if (f < to && !isImported(track[f])) continue;
+      if (f > start) spans.push({ from: start, to: f });
+      start = f + 1;
+    }
+  }
+  return spans;
 }
+
+export function processTrack(track: Track, clip: Clip, tuning: Tuning): Track {
+  const spans = drawnSpans(track, shotsOf(clip));
+  const shifted = compensateLag(track, spans, { lagMs: tuning.lagMs, fps: clip.fps });
+  return bridge(smooth(shifted, spans, tuning.smoothRadius), spans, BRIDGE_FRAMES);
+}
+
+export function anchorOf(cell: Placed, { height }: Clip): readonly [x: number, y: number, size: number] {
+  if (isSample(cell)) return [cell[0], cell[1], cell[2]];
+  const [x, y, w] = cell.box;
+  const { min, max } = sizeRange(height);
+  return [x + w / 2, y, clamp(FONT_PER_BOX_WIDTH * w, min, max)];
+}
+
 export function toWireBox([px, py, size]: Sample, { width: W, height: H }: Clip): WireBox {
   const { min, max } = sizeRange(H);
   const font = clamp(size, min, max);
@@ -145,7 +166,7 @@ export function toRuns(processed: Track, clip: Clip): WireRun[] {
     let run: WireRun | null = null;
     for (let f = from; f < to; f++) {
       const cell = processed[f];
-      if (!isSample(cell)) {
+      if (!isPlaced(cell)) {
         run = null;
         continue;
       }
@@ -153,7 +174,7 @@ export function toRuns(processed: Track, clip: Clip): WireRun[] {
         run = { from: f, boxes: [] };
         runs.push(run);
       }
-      run.boxes.push(toWireBox(cell, clip));
+      run.boxes.push(isSample(cell) ? toWireBox(cell, clip) : [...cell.box]);
     }
   }
   return runs;

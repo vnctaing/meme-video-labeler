@@ -11,6 +11,8 @@ import {
   type Sample,
   type Track,
   type Tuning,
+  anchorOf,
+  isPlaced,
   isSample,
   processTrack,
   shotOf,
@@ -151,7 +153,7 @@ export function brushSize(s: EditorState, id: SubjectId, clip: Clip): number {
   for (let d = 0; s.frame - d >= from || s.frame + d < to; d++) {
     for (const f of [s.frame - d, s.frame + d]) {
       const cell = f >= from && f < to ? track[f] : null;
-      if (isSample(cell)) return clamp(cell[2], min, max);
+      if (isPlaced(cell)) return clamp(anchorOf(cell, clip)[2], min, max);
     }
   }
   return clamp(DEFAULT_SIZE_PER_HEIGHT * clip.height, min, max);
@@ -321,5 +323,5 @@ export function modeOf(s: EditorState, clip: Clip, ui: { readonly playing: boole
   if (subject === undefined) return { kind: "empty" };
   if (s.stroke !== null) return { kind: "recording", subject, erasing: ui.erasing };
   const { from, to } = shotOf(clip, s.frame);
-  return processed(s, subject, clip).slice(from, to).some(isSample) ? { kind: "paused", subject } : { kind: "follow", subject };
+  return processed(s, subject, clip).slice(from, to).some(isPlaced) ? { kind: "paused", subject } : { kind: "follow", subject };
 }

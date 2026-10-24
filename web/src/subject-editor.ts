@@ -19,7 +19,7 @@ import {
   toTemplate,
 } from "./subjects.ts";
 import { type SubjectId, type TemplateId, frameIndexAt } from "./template.ts";
-import { type Clip, type Rate, isSample, shotOf, toWireBox } from "./track.ts";
+import { type Clip, type Rate, anchorOf, isPlaced, shotOf, toWireBox } from "./track.ts";
 
 const SAVE_DEBOUNCE_MS = 300;
 const TYPED_EDITS: ReadonlySet<Action["kind"]> = new Set(["retitle", "rename", "tune"]);
@@ -165,12 +165,13 @@ export function mountSubjectEditor(container: HTMLElement, id: TemplateId, initi
       let open = false;
       for (let f = from; f < to; f++) {
         const cell = track[f];
-        if (!isSample(cell)) {
+        if (!isPlaced(cell)) {
           open = false;
           continue;
         }
-        if (open) ctx.lineTo(cell[0], cell[1]);
-        else ctx.moveTo(cell[0], cell[1]);
+        const [x, y] = anchorOf(cell, clip);
+        if (open) ctx.lineTo(x, y);
+        else ctx.moveTo(x, y);
         open = true;
       }
       ctx.stroke();

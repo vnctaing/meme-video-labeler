@@ -94,7 +94,7 @@ const shot = async (name) => page.screenshot({ path: path.join(OUT, `${String(++
 
 const canvas = () => page.locator("canvas.editor-canvas");
 const frame = async () => Number(await canvas().getAttribute("data-frame"));
-const selectedLane = () => page.locator(".lane.selected input.lane-name").inputValue();
+const selectedLane = async () => ((await page.locator(".lane.selected").count()) === 0 ? null : page.locator(".lane.selected .lane-name").textContent());
 const paused = () => page.evaluate(() => document.querySelector("video.editor-video").paused);
 const settled = () =>
   page.waitForFunction(() => {
@@ -113,10 +113,19 @@ const draftPut = () => page.waitForResponse((r) => r.request().method() === "PUT
 const getDraft = async () => (await (await fetch(`${APP}api/templates/${ID}/draft`)).json()).draft;
 const savedTemplate = () => JSON.parse(readFileSync(path.join(ROOT, TEMPLATE_JSON), "utf8"));
 
-async function addSubject(name) {
-  await page.locator(".timeline button.add-subject").click();
+async function rename(lane, name) {
+  await lane.locator(".lane-name").dblclick();
+  const field = lane.locator("input.lane-rename");
+  assert(await field.evaluate((n) => document.activeElement === n && n.selectionStart === 0 && n.selectionEnd === n.value.length), "a double-click on the name opens it for typing, all selected");
   await page.keyboard.type(name);
   await page.keyboard.press("Enter");
+  assert(await page.evaluate(() => document.activeElement === document.body), `Enter after typing ${name} gives the keyboard back to the shortcuts`);
+}
+
+async function addSubject(name) {
+  await page.locator(".timeline button.add-subject").click();
+  assert(await page.evaluate(() => document.activeElement === document.body), "+ Add subject focuses nothing, so the shortcuts keep working");
+  await rename(page.locator(".lane.selected"), name);
   await page.getByText(`Hold the mouse on ${name} and follow it`).waitFor();
   log(`PASS added ${name}, the banner reads "Hold the mouse on ${name} and follow it"`);
 }
@@ -192,7 +201,7 @@ try {
   await shot("gallery-edit-link");
   await edit.click();
   await page.locator(".lane").nth(2).waitFor();
-  const lanes = await page.locator("input.lane-name").evaluateAll((ns) => ns.map((n) => n.value));
+  const lanes = await page.locator(".lane-name").evaluateAll((ns) => ns.map((n) => n.textContent));
   assert(JSON.stringify(lanes) === JSON.stringify(["Thom", "Barley", "Celia"]), `the editor opens with the subjects ${lanes.join(", ")}`);
   const bars = await page.locator(".lane-track .bar").count();
   assert(bars === 6, `the lanes show the 6 saved runs as bars (got ${bars})`);
@@ -215,7 +224,7 @@ try {
   await page.goto(`${APP}#/edit/${ID}`);
   await page.locator(".lane").nth(2).waitFor();
   await settled();
-  assert((await frame()) === 0 && (await selectedLane()) === "Thom", "the editor starts at frame 0 with Thom selected");
+  assert((await frame()) === 0 && (await selectedLane()) === null, "the editor starts at frame 0 with nothing selected");
   await page.locator('.lane[data-subject="barley"] .lane-track').click();
   assert((await selectedLane()) === "Barley" && (await frame()) === 0, "clicking Barley's lane selects it and keeps frame 0");
   await page.mouse.move(...(await scrubX(40)));

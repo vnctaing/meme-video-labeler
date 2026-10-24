@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { type Action, type EditorState, type SubjectDraft, brushSize, editorState, modeOf, newSubject, reduce, runsOf, saveBlocker, saveBody } from "./subjects.ts";
+import { type Action, COLORS, type EditorState, type SubjectDraft, brushSize, editorState, modeOf, newSubject, reduce, runsOf, saveBlocker, saveBody } from "./subjects.ts";
 import type { SubjectId } from "./template.ts";
 import { type Cell, type Clip, DEFAULT_TUNING, HIDDEN, type Sample } from "./track.ts";
 
@@ -7,9 +7,10 @@ const CLIP: Clip = { width: 1280, height: 534, fps: 24, frameCount: 466, cuts: [
 const id = (s: string) => s as SubjectId;
 const blank = (): Cell[] => Array<Cell>(CLIP.frameCount).fill(null);
 const subject = (n: number, track: Cell[] = blank()): SubjectDraft => ({ ...newSubject([], CLIP.frameCount), id: id(`s${n}`), name: `S${n}`, track });
-const start = (subjects: SubjectDraft[] = [subject(1)], frame = 0): EditorState =>
-  reduce(editorState({ doc: { title: "T", subjects }, tuning: DEFAULT_TUNING }), { kind: "seek", frame }, CLIP);
 const run = (s: EditorState, ...actions: Action[]) => actions.reduce((acc, a) => reduce(acc, a, CLIP), s);
+const opened = (subjects: SubjectDraft[]) => editorState({ doc: { title: "T", subjects }, tuning: DEFAULT_TUNING });
+const start = (subjects: SubjectDraft[] = [subject(1)], frame = 0): EditorState =>
+  run(opened(subjects), { kind: "seek", frame }, ...(subjects.length === 0 ? [] : [{ kind: "select", id: subjects[0].id } as const]));
 const stroke = (from: number, to: number, at: (f: number) => readonly [number, number] = () => [100, 200], erase = false): Action[] => [
   { kind: "seek", frame: from },
   { kind: "strokeBegin", at: at(from), erase, rate: 0.5 },
@@ -99,6 +100,20 @@ describe("subjects and history", () => {
     }
   });
 
+  test("the editor opens with nothing selected, so a press on the video records nothing", () => {
+    const s = opened([subject(1), subject(2)]);
+    expect(s.selected).toBeNull();
+    expect(run(s, { kind: "strokeBegin", at: [1, 1], erase: false, rate: 1 })).toBe(s);
+  });
+
+  test("a new subject takes the first colour no other subject uses", () => {
+    const imported = [subject(1), subject(2), subject(3)].map((x, i) => ({ ...x, id: id(["thom", "barley", "celia"][i]), color: COLORS[i] }));
+    const added = run(opened(imported), { kind: "addSubject" }, { kind: "addSubject" });
+    expect(added.doc.subjects.map((x) => x.color)).toEqual(COLORS.slice(0, 5));
+    const gap = run(opened(imported), { kind: "deleteSubject", id: id("barley") }, { kind: "addSubject" });
+    expect(gap.doc.subjects.map((x) => x.color)).toEqual([COLORS[0], COLORS[2], COLORS[1]]);
+  });
+
   test("adding a subject picks the next free id and colour, with an empty track, and selects it", () => {
     const added = run(start(), { kind: "addSubject" });
     expect(added.selected).toBe("s2");
@@ -119,6 +134,7 @@ describe("modeOf and save", () => {
 
   test("names each mode", () => {
     expect(modeOf(start([]), CLIP, ui).kind).toBe("empty");
+    expect(modeOf(opened([subject(1)]), CLIP, ui).kind).toBe("pick");
     expect(modeOf(start(), CLIP, ui).kind).toBe("follow");
     const drawn = run(start(), ...stroke(5, 40));
     expect(modeOf(drawn, CLIP, ui).kind).toBe("paused");

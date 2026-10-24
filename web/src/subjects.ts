@@ -73,7 +73,7 @@ export function editorState({ doc, tuning }: Draft): EditorState {
     past: [],
     future: [],
     lastEdit: null,
-    selected: doc.subjects[0]?.id ?? null,
+    selected: null,
     frame: 0 as FrameIndex,
     stroke: null,
     strokeFrom: null,
@@ -104,7 +104,9 @@ export function newSubject(existing: readonly SubjectDraft[], frameCount: number
   const ids = new Set(existing.map((s) => s.id));
   let n = 1;
   while (ids.has(`s${n}` as SubjectId)) n++;
-  return { id: `s${n}` as SubjectId, name: `Subject ${n}`, color: COLORS[(n - 1) % COLORS.length], track: Array<Cell>(frameCount).fill(null) };
+  const used = new Set(existing.map((s) => s.color));
+  const color = COLORS.find((c) => !used.has(c)) ?? COLORS[existing.length % COLORS.length];
+  return { id: `s${n}` as SubjectId, name: `Subject ${n}`, color, track: Array<Cell>(frameCount).fill(null) };
 }
 
 export function importDraft(t: Template): Draft {
@@ -314,6 +316,7 @@ export function saveBlocker(s: EditorState, runs: ReadonlyMap<SubjectId, readonl
 
 export type Mode =
   | { readonly kind: "empty" }
+  | { readonly kind: "pick" }
   | { readonly kind: "follow"; readonly subject: SubjectDraft }
   | { readonly kind: "paused"; readonly subject: SubjectDraft }
   | { readonly kind: "recording"; readonly subject: SubjectDraft; readonly erasing: boolean }
@@ -321,8 +324,9 @@ export type Mode =
 
 export function modeOf(s: EditorState, clip: Clip, ui: { readonly playing: boolean; readonly erasing: boolean }): Mode {
   if (ui.playing && s.stroke === null) return { kind: "playing" };
-  const subject = s.doc.subjects.find((x) => x.id === s.selected) ?? s.doc.subjects[0];
-  if (subject === undefined) return { kind: "empty" };
+  if (s.doc.subjects.length === 0) return { kind: "empty" };
+  const subject = s.doc.subjects.find((x) => x.id === s.selected);
+  if (subject === undefined) return { kind: "pick" };
   if (s.stroke !== null) return { kind: "recording", subject, erasing: ui.erasing };
   const { from, to } = shotOf(clip, s.frame);
   return processed(s, subject, clip).slice(from, to).some(isPlaced) ? { kind: "paused", subject } : { kind: "follow", subject };

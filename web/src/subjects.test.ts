@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { type Action, type EditorState, type SubjectDraft, brushSize, editorState, modeOf, newSubject, reduce, runsOf, saveBlocker, saveBody } from "./subjects.ts";
+import { type Action, COLORS, type EditorState, type SubjectDraft, brushSize, editorState, modeOf, newSubject, reduce, runsOf, saveBlocker, saveBody } from "./subjects.ts";
 import type { SubjectId } from "./template.ts";
 import { type Cell, type Clip, DEFAULT_TUNING, HIDDEN, type Sample } from "./track.ts";
 
@@ -7,9 +7,10 @@ const CLIP: Clip = { width: 1280, height: 534, fps: 24, frameCount: 466, cuts: [
 const id = (s: string) => s as SubjectId;
 const blank = (): Cell[] => Array<Cell>(CLIP.frameCount).fill(null);
 const subject = (n: number, track: Cell[] = blank()): SubjectDraft => ({ ...newSubject([], CLIP.frameCount), id: id(`s${n}`), name: `S${n}`, track });
-const start = (subjects: SubjectDraft[] = [subject(1)], frame = 0): EditorState =>
-  reduce(editorState({ doc: { title: "T", subjects }, tuning: DEFAULT_TUNING }), { kind: "seek", frame }, CLIP);
 const run = (s: EditorState, ...actions: Action[]) => actions.reduce((acc, a) => reduce(acc, a, CLIP), s);
+const opened = (subjects: SubjectDraft[]) => editorState({ doc: { title: "T", subjects }, tuning: DEFAULT_TUNING });
+const start = (subjects: SubjectDraft[] = [subject(1)], frame = 0): EditorState =>
+  run(opened(subjects), { kind: "seek", frame }, ...(subjects.length === 0 ? [] : [{ kind: "select", id: subjects[0].id } as const]));
 const stroke = (from: number, to: number, at: (f: number) => readonly [number, number] = () => [100, 200], erase = false): Action[] => [
   { kind: "seek", frame: from },
   { kind: "strokeBegin", at: at(from), erase, rate: 0.5 },
@@ -99,6 +100,20 @@ describe("subjects and history", () => {
     }
   });
 
+  test("the editor opens with nothing selected, so a press on the video records nothing", () => {
+    const s = opened([subject(1), subject(2)]);
+    expect(s.selected).toBeNull();
+    expect(run(s, { kind: "strokeBegin", at: [1, 1], erase: false, rate: 1 })).toBe(s);
+  });
+
+  test("a new subject takes the first colour no other subject uses", () => {
+    const imported = [subject(1), subject(2), subject(3)].map((x, i) => ({ ...x, id: id(["thom", "barley", "celia"][i]), color: COLORS[i] }));
+    const added = run(opened(imported), { kind: "addSubject" }, { kind: "addSubject" });
+    expect(added.doc.subjects.map((x) => x.color)).toEqual(COLORS.slice(0, 5));
+    const gap = run(opened(imported), { kind: "deleteSubject", id: id("barley") }, { kind: "addSubject" });
+    expect(gap.doc.subjects.map((x) => x.color)).toEqual([COLORS[0], COLORS[2], COLORS[1]]);
+  });
+
   test("adding a subject picks the next free id and colour, with an empty track, and selects it", () => {
     const added = run(start(), { kind: "addSubject" });
     expect(added.selected).toBe("s2");
@@ -119,6 +134,7 @@ describe("modeOf and save", () => {
 
   test("names each mode", () => {
     expect(modeOf(start([]), CLIP, ui).kind).toBe("empty");
+    expect(modeOf(opened([subject(1)]), CLIP, ui).kind).toBe("pick");
     expect(modeOf(start(), CLIP, ui).kind).toBe("follow");
     const drawn = run(start(), ...stroke(5, 40));
     expect(modeOf(drawn, CLIP, ui).kind).toBe("paused");
@@ -142,5 +158,58 @@ describe("modeOf and save", () => {
     const drawn = run(start(), ...stroke(5, 40));
     const untitled = run(drawn, { kind: "retitle", title: "  " });
     expect(saveBlocker(untitled, runsOf(untitled, CLIP))).toBe("Give the template a title first");
+  });
+});
+
+describe("a subject with imported frames", () => {
+  const box = (f: number): Cell => ({ box: [400 + f, 50, 357, 400] });
+  const imported = (from = 100, to = 200) => {
+    const t = blank();
+    for (let f = from; f < to; f++) t[f] = box(f);
+    return t;
+  };
+
+  test("the brush starts at the size the renderer gives the nearest box", () => {
+    expect(brushSize(start([subject(1, imported())], 150), id("s1"), CLIP)).toBeCloseTo(0.11 * 534, 9);
+    const narrow = blank();
+    narrow[100] = { box: [0, 0, 100, 1] };
+    expect(brushSize(start([subject(1, narrow)], 120), id("s1"), CLIP)).toBeCloseTo(28, 9);
+  });
+
+  test("a subject shown only by imported boxes is paused, not waiting to be followed", () => {
+    expect(modeOf(start([subject(1, imported())], 150), CLIP, { playing: false, erasing: false }).kind).toBe("paused");
+  });
+
+  test("drawing over imported frames replaces only those frames, and undo brings the boxes back", () => {
+    const before = start([subject(1, imported())]);
+    const drawn = run(before, ...stroke(140, 160));
+    expect(track(drawn).slice(138, 163).map((c) => (Array.isArray(c) ? "D" : c === null ? c : "I"))).toEqual([
+      "I", "I", ...Array(21).fill("D"), "I", "I",
+    ]);
+    expect(track(drawn)[139]).toBe(track(before)[139]);
+    expect(track(run(drawn, { kind: "undo" }))).toBe(track(before));
+  });
+});
+
+describe("two subjects from the same frame", () => {
+  test("selecting or adding a subject keeps the playhead where the stroke ended", () => {
+    const drawn = run(start([subject(1), subject(2)]), ...stroke(140, 160));
+    expect(drawn.frame).toBe(160);
+    expect(run(drawn, { kind: "select", id: id("s2") }).frame).toBe(160);
+    expect(run(drawn, { kind: "addSubject" }).frame).toBe(160);
+  });
+
+  test("the frame where the last stroke began survives its end, selection, adding and undo", () => {
+    expect(start().strokeFrom).toBeNull();
+    const drawn = run(start([subject(1), subject(2)]), ...stroke(140, 160));
+    expect(drawn.strokeFrom).toBe(140);
+    const moved = run(drawn, { kind: "select", id: id("s2") }, { kind: "addSubject" }, { kind: "undo" }, { kind: "step", delta: 1 });
+    expect(moved.strokeFrom).toBe(140);
+    const back = run(moved, { kind: "seek", frame: moved.strokeFrom ?? -1 });
+    expect(back.frame).toBe(140);
+    const second = run(back, { kind: "select", id: id("s2") }, { kind: "strokeBegin", at: [5, 5], erase: false, rate: 1 }, { kind: "strokeSample", frame: 150, at: [5, 5], erase: false }, { kind: "strokeEnd" });
+    expect(track(second, 2).findIndex((c) => c !== null)).toBe(140);
+    expect(second.strokeFrom).toBe(140);
+    expect(run(second, ...stroke(200, 210)).strokeFrom).toBe(200);
   });
 });

@@ -2,6 +2,7 @@ import {
   ApiError,
   type Clip,
   type Job,
+  type OpenedEdit,
   type JobState,
   type Running,
   ServerNotAnswering,
@@ -10,7 +11,9 @@ import {
   createJob,
   getDraft,
   getJob,
+  jobSession,
   listJobs,
+  openTemplateEdit,
   retry,
   shortNameToId,
   sourceUrl,
@@ -19,6 +22,7 @@ import { type View, el } from "./dom.ts";
 import { mountSubjectEditor } from "./subject-editor.ts";
 import type { TemplateId } from "./template.ts";
 
+const BASE_URL = new URL(import.meta.env.BASE_URL, location.href).href;
 const MAX_CLIP_SECONDS = 30;
 const DEFAULT_LICENSE = "unknown, personal use";
 const POLL_MS = 500;
@@ -163,8 +167,15 @@ function stepPanel(job: Job, show: (job: Job) => void): Panel {
     case "downloaded":
       return still(clipPanel(job.id, state.source, null, show));
     case "editing":
+      return editorPanel(
+        getDraft(job.id).then((opened) => ({ ...opened, session: jobSession(job.id) })),
+        changeClipLink(job.id, state.source, state.clip, show),
+      );
     case "ready":
-      return editorPanel(job.id, state.source, state.clip, show);
+      return editorPanel(
+        openTemplateEdit(job.id, BASE_URL),
+        changeClipLink(job.id, state.source, state.clip, show),
+      );
     case "failed":
       return still(failedPanel(job, state, show));
     default: {
@@ -362,18 +373,18 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
   );
 }
 
-function editorPanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): Panel {
+function editorPanel(opening: Promise<OpenedEdit>, below: HTMLElement | null): Panel {
   const node = el("section", { className: "subject-editor" }, el("p", { role: "status" }, "Loading the editor…"));
   let alive = true;
   let destroy = () => {};
-  getDraft(id)
-    .then((view) => {
+  opening
+    .then((opened) => {
       if (!alive) return;
       node.replaceChildren();
-      destroy = mountSubjectEditor(node, id, view).destroy;
-      node.append(changeClipLink(id, source, clip, show));
+      destroy = mountSubjectEditor(node, opened.session, opened).destroy;
+      if (below !== null) node.append(below);
     })
-    .catch((e: unknown) => node.replaceChildren(el("p", { className: "field-error" }, message(e))));
+    .catch((e: unknown) => node.replaceChildren(el("p", { className: "field-error" }, message(e)), below ?? "", el("a", { href: "#/" }, "Back to all clips")));
   return {
     node,
     teardown: () => {
@@ -381,6 +392,11 @@ function editorPanel(id: TemplateId, source: SourceFacts, clip: Clip, show: (job
       destroy();
     },
   };
+}
+
+export async function editTemplateView(id: TemplateId): Promise<View> {
+  const panel = editorPanel(openTemplateEdit(id, BASE_URL), null);
+  return { nodes: [el("main", { className: "author" }, panel.node)], teardown: panel.teardown };
 }
 
 function changeClipLink(id: TemplateId, source: SourceFacts, clip: Clip, show: (job: Job) => void): HTMLElement {

@@ -93,7 +93,7 @@ export function int(v: unknown, path: string, min: number): number {
   return v;
 }
 
-function parseBox(v: unknown, path: string, width: number, height: number): Box {
+export function parseBox(v: unknown, path: string, width: number, height: number): Box {
   const a = array(v, path);
   if (a.length !== 4) throw new TemplateError(path, "expected [x, y, w, h]");
   const x = int(a[0], `${path}[0]`, 0);

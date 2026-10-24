@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from labelmeme.cuts import read_cuts
-from labelmeme.job import write_atomic
 from labelmeme.prep import read_facts
-from labelmeme.schema import SLUG
+from labelmeme.schema import SLUG, write_atomic
 
 DEFAULT_TUNING = {"lagMs": 150, "smoothRadius": 4}
 RATES = (0.25, 0.5, 1)
@@ -66,12 +65,28 @@ def _number(v: object, path: str, lo: float, hi: float) -> float:
     return v
 
 
+def _box(v: dict, path: str, clip: ClipFacts) -> list[int]:
+    extra = sorted(set(v) - {"box"})
+    if extra:
+        raise ValueError(f"{path}.{extra[0]}: expected only a box")
+    box = _list(v.get("box"), f"{path}.box")
+    if len(box) != 4:
+        raise ValueError(f"{path}.box: expected [x, y, w, h]")
+    x = _int(box[0], f"{path}.box[0]", 0, clip.width - 1)
+    y = _int(box[1], f"{path}.box[1]", 0, clip.height - 1)
+    w = _int(box[2], f"{path}.box[2]", 1, clip.width - x)
+    h = _int(box[3], f"{path}.box[3]", 1, clip.height - y)
+    return [x, y, w, h]
+
+
 def _cell(v: object, path: str, clip: ClipFacts) -> object:
     if v is None or v == "hidden":
         return v
+    if isinstance(v, dict):
+        return {"box": _box(v, path, clip)}
     cell = _list(v, path)
     if len(cell) != 4:
-        raise ValueError(f"{path}: expected null, \"hidden\" or [x, y, size, rate]")
+        raise ValueError(f"{path}: expected null, \"hidden\", [x, y, size, rate] or {{\"box\": [x, y, w, h]}}")
     x = _number(cell[0], f"{path}[0]", 0, clip.width)
     y = _number(cell[1], f"{path}[1]", 0, clip.height)
     size = _number(cell[2], f"{path}[2]", 0, math.inf)

@@ -4,12 +4,15 @@ import {
   type Cell,
   type Clip,
   DEFAULT_SIZE_PER_HEIGHT,
+  DEFAULT_TUNING,
   HIDDEN,
   type Rate,
   SIZE_STEP,
   type Sample,
   type Track,
   type Tuning,
+  anchorOf,
+  isPlaced,
   isSample,
   processTrack,
   shotOf,
@@ -57,6 +60,7 @@ export interface EditorState {
   readonly selected: SubjectId | null;
   readonly frame: FrameIndex;
   readonly stroke: Stroke | null;
+  readonly strokeFrom: FrameIndex | null;
   readonly brush: ReadonlyMap<SubjectId, number>;
 }
 
@@ -69,9 +73,10 @@ export function editorState({ doc, tuning }: Draft): EditorState {
     past: [],
     future: [],
     lastEdit: null,
-    selected: doc.subjects[0]?.id ?? null,
+    selected: null,
     frame: 0 as FrameIndex,
     stroke: null,
+    strokeFrom: null,
     brush: new Map(),
   };
 }
@@ -99,7 +104,18 @@ export function newSubject(existing: readonly SubjectDraft[], frameCount: number
   const ids = new Set(existing.map((s) => s.id));
   let n = 1;
   while (ids.has(`s${n}` as SubjectId)) n++;
-  return { id: `s${n}` as SubjectId, name: `Subject ${n}`, color: COLORS[(n - 1) % COLORS.length], track: Array<Cell>(frameCount).fill(null) };
+  const used = new Set(existing.map((s) => s.color));
+  const color = COLORS.find((c) => !used.has(c)) ?? COLORS[existing.length % COLORS.length];
+  return { id: `s${n}` as SubjectId, name: `Subject ${n}`, color, track: Array<Cell>(frameCount).fill(null) };
+}
+
+export function importDraft(t: Template): Draft {
+  const subjects = t.subjects.map((x, i): SubjectDraft => {
+    const track = Array<Cell>(t.frameCount).fill(null);
+    for (const run of x.runs) run.boxes.forEach(({ x: bx, y, w, h }, j) => (track[run.from + j] = { box: [bx, y, w, h] }));
+    return { id: x.id, name: x.name, color: COLORS[i % COLORS.length], track };
+  });
+  return { doc: { title: t.title, subjects }, tuning: DEFAULT_TUNING };
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
@@ -141,7 +157,7 @@ export function brushSize(s: EditorState, id: SubjectId, clip: Clip): number {
   for (let d = 0; s.frame - d >= from || s.frame + d < to; d++) {
     for (const f of [s.frame - d, s.frame + d]) {
       const cell = f >= from && f < to ? track[f] : null;
-      if (isSample(cell)) return clamp(cell[2], min, max);
+      if (isPlaced(cell)) return clamp(anchorOf(cell, clip)[2], min, max);
     }
   }
   return clamp(DEFAULT_SIZE_PER_HEIGHT * clip.height, min, max);
@@ -176,7 +192,7 @@ export function reduce(s: EditorState, a: Action, clip: Clip): EditorState {
     case "strokeBegin": {
       if (s.selected === null || s.stroke !== null) return s;
       const stroke = { subject: s.selected, rate: a.rate, size: brushSize(s, s.selected, clip) };
-      return { ...s, stroke: { ...stroke, last: s.frame, cells: new Map([[s.frame, drawn(a.at, a.erase, stroke, clip)]]) } };
+      return { ...s, strokeFrom: s.frame, stroke: { ...stroke, last: s.frame, cells: new Map([[s.frame, drawn(a.at, a.erase, stroke, clip)]]) } };
     }
     case "strokeSample": {
       const stroke = s.stroke;
@@ -300,6 +316,7 @@ export function saveBlocker(s: EditorState, runs: ReadonlyMap<SubjectId, readonl
 
 export type Mode =
   | { readonly kind: "empty" }
+  | { readonly kind: "pick" }
   | { readonly kind: "follow"; readonly subject: SubjectDraft }
   | { readonly kind: "paused"; readonly subject: SubjectDraft }
   | { readonly kind: "recording"; readonly subject: SubjectDraft; readonly erasing: boolean }
@@ -307,9 +324,10 @@ export type Mode =
 
 export function modeOf(s: EditorState, clip: Clip, ui: { readonly playing: boolean; readonly erasing: boolean }): Mode {
   if (ui.playing && s.stroke === null) return { kind: "playing" };
-  const subject = s.doc.subjects.find((x) => x.id === s.selected) ?? s.doc.subjects[0];
-  if (subject === undefined) return { kind: "empty" };
+  if (s.doc.subjects.length === 0) return { kind: "empty" };
+  const subject = s.doc.subjects.find((x) => x.id === s.selected);
+  if (subject === undefined) return { kind: "pick" };
   if (s.stroke !== null) return { kind: "recording", subject, erasing: ui.erasing };
   const { from, to } = shotOf(clip, s.frame);
-  return processed(s, subject, clip).slice(from, to).some(isSample) ? { kind: "paused", subject } : { kind: "follow", subject };
+  return processed(s, subject, clip).slice(from, to).some(isPlaced) ? { kind: "paused", subject } : { kind: "follow", subject };
 }

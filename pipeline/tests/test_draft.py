@@ -38,6 +38,13 @@ def test_parse_accepts_null_hidden_and_a_sample_and_strips_the_name() -> None:
     (_with_track([None, [641, 1, 1, 1], None, None]), "$.subjects[0].track[1][0]"),
     (_with_track([None, [1, 1, 1, 0.3], None, None]), "$.subjects[0].track[1][3]"),
     (_with_track([None, [1, 1, 0, 1], None, None]), "$.subjects[0].track[1][2]"),
+    (_with_track([None, {"box": [1.5, 0, 10, 10]}, None, None]), "$.subjects[0].track[1].box[0]"),
+    (_with_track([None, {"box": [0, 0, 0, 10]}, None, None]), "$.subjects[0].track[1].box[2]"),
+    (_with_track([None, {"box": [600, 0, 41, 10]}, None, None]), "$.subjects[0].track[1].box[2]"),
+    (_with_track([None, {"box": [0, 0, 10, 10], "rate": 1}, None, None]), "$.subjects[0].track[1].rate"),
+    (_with_track([None, {"box": [0, True, 10, 10]}, None, None]), "$.subjects[0].track[1].box[1]"),
+    (_with_track([None, {}, None, None]), "$.subjects[0].track[1].box"),
+    (_with_track([None, [0, 0, 10, 10], None, None]), "$.subjects[0].track[1][3]"),
     (_draft(tuning={"lagMs": 401, "smoothRadius": 4}), "$.tuning.lagMs"),
     (_draft(subjects=[_draft()["subjects"][0], _draft()["subjects"][0]]), "$.subjects[1].id"),
 ])
@@ -45,6 +52,12 @@ def test_parse_rejects_and_names_the_path(draft: dict, path: str) -> None:
     with pytest.raises(ValueError) as e:
         parse_draft(draft, CLIP)
     assert str(e.value).split(":", 1)[0] == path
+
+
+def test_a_box_cell_is_an_imported_frame_kept_as_written() -> None:
+    parsed = parse_draft(_with_track([{"box": [0, 10, 640, 350]}, None, None, None]), CLIP)
+    assert parsed["subjects"][0]["track"][0] == {"box": [0, 10, 640, 350]}
+    assert dump_draft(parsed).count('{"box":[0,10,640,350]}') == 1
 
 
 def test_dump_and_parse_round_trip() -> None:

@@ -1,5 +1,5 @@
-import type { Draft, SaveBody, SubjectDraft } from "./subjects.ts";
-import { type SubjectId, type TemplateId, TemplateError, array, int, isRecord, record, slug, string } from "./template.ts";
+import { type Draft, type SaveBody, type SubjectDraft, importDraft } from "./subjects.ts";
+import { type SubjectId, type TemplateId, TemplateError, array, int, isRecord, loadTemplate, parseBox, record, slug, string } from "./template.ts";
 import { type Cell, type Clip as ClipFacts, HIDDEN, type Rate } from "./track.ts";
 
 export interface SourceFacts {
@@ -166,10 +166,16 @@ export function parseJob(json: unknown, path = "$"): Job {
 
 const RATES: readonly Rate[] = [0.25, 0.5, 1];
 
-function parseCell(v: unknown, path: string): Cell {
+function parseCell(v: unknown, path: string, clip: ClipFacts): Cell {
   if (v === null || v === HIDDEN) return v;
+  if (isRecord(v)) {
+    const extra = Object.keys(v).find((k) => k !== "box");
+    if (extra !== undefined) throw new TemplateError(`${path}.${extra}`, "expected only a box");
+    const { x, y, w, h } = parseBox(v.box, `${path}.box`, clip.width, clip.height);
+    return { box: [x, y, w, h] };
+  }
   const a = array(v, path);
-  if (a.length !== 4) throw new TemplateError(path, "expected null, \"hidden\" or [x, y, size, rate]");
+  if (a.length !== 4) throw new TemplateError(path, "expected null, \"hidden\", [x, y, size, rate] or {\"box\": [x, y, w, h]}");
   const rate = RATES.find((r) => r === a[3]);
   if (rate === undefined) throw new TemplateError(`${path}[3]`, `expected a rate in ${RATES.join(", ")}`);
   return [number(a[0], `${path}[0]`), number(a[1], `${path}[1]`), number(a[2], `${path}[2]`), rate];
@@ -177,7 +183,7 @@ function parseCell(v: unknown, path: string): Cell {
 
 function parseSubjectDraft(v: unknown, path: string, clip: ClipFacts): SubjectDraft {
   const o = record(v, path);
-  const track = array(o.track, `${path}.track`).map((c, f) => parseCell(c, `${path}.track[${f}]`));
+  const track = array(o.track, `${path}.track`).map((c, f) => parseCell(c, `${path}.track[${f}]`, clip));
   if (track.length !== clip.frameCount) throw new TemplateError(`${path}.track`, `expected ${clip.frameCount} cells, got ${track.length}`);
   return { id: slug(o.id, `${path}.id`) as SubjectId, name: string(o.name, `${path}.name`), color: string(o.color, `${path}.color`), track };
 }
@@ -193,18 +199,25 @@ function parseClipFacts(v: unknown, path: string): ClipFacts {
   };
 }
 
+function parseDraft(v: unknown, clip: ClipFacts): Draft {
+  const d = record(v, "$.draft");
+  const t = record(d.tuning, "$.draft.tuning");
+  return {
+    doc: { title: string(d.title, "$.draft.title"), subjects: array(d.subjects, "$.draft.subjects").map((s, i) => parseSubjectDraft(s, `$.draft.subjects[${i}]`, clip)) },
+    tuning: { lagMs: int(t.lagMs, "$.draft.tuning.lagMs", 0), smoothRadius: int(t.smoothRadius, "$.draft.tuning.smoothRadius", 0) },
+  };
+}
+
 export function parseDraftView(json: unknown): { readonly draft: Draft; readonly clip: ClipFacts } {
   const o = record(json, "$");
   const clip = parseClipFacts(o.clip, "$.clip");
-  const d = record(o.draft, "$.draft");
-  const t = record(d.tuning, "$.draft.tuning");
-  return {
-    clip,
-    draft: {
-      doc: { title: string(d.title, "$.draft.title"), subjects: array(d.subjects, "$.draft.subjects").map((s, i) => parseSubjectDraft(s, `$.draft.subjects[${i}]`, clip)) },
-      tuning: { lagMs: int(t.lagMs, "$.draft.tuning.lagMs", 0), smoothRadius: int(t.smoothRadius, "$.draft.tuning.smoothRadius", 0) },
-    },
-  };
+  return { clip, draft: parseDraft(o.draft, clip) };
+}
+
+export function parseTemplateDraftView(json: unknown): { readonly draft: Draft | null; readonly clip: ClipFacts } {
+  const o = record(json, "$");
+  const clip = parseClipFacts(o.clip, "$.clip");
+  return { clip, draft: o.draft === null ? null : parseDraft(o.draft, clip) };
 }
 
 const draftJson = ({ doc, tuning }: Draft) => ({ version: 1, title: doc.title, tuning, subjects: doc.subjects });
@@ -254,7 +267,50 @@ export const getDraft = async (id: TemplateId) => parseDraftView(await request("
 export const putDraft = async (id: TemplateId, draft: Draft): Promise<void> => {
   await request("PUT", jobUrl(id, "/draft"), draftJson(draft), true);
 };
-export const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
-export const save = async (id: TemplateId, body: SaveBody): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/save"), body));
+const clipUrl = (id: TemplateId): string => jobUrl(id, "/clip.mp4");
 export const retry = async (id: TemplateId): Promise<Job> => parseJob(await request("POST", jobUrl(id, "/retry")));
 export const sourceUrl = (id: TemplateId): string => jobUrl(id, "/source.mp4");
+
+export interface EditSession {
+  readonly id: TemplateId;
+  readonly videoUrl: string;
+  readonly backHref: string;
+  putDraft(draft: Draft): Promise<void>;
+  save(body: SaveBody): Promise<void>;
+}
+
+export const jobSession = (id: TemplateId): EditSession => ({
+  id,
+  videoUrl: clipUrl(id),
+  backHref: "#/new",
+  putDraft: (draft) => putDraft(id, draft),
+  save: async (body) => {
+    parseJob(await request("POST", jobUrl(id, "/save"), body));
+  },
+});
+
+const templateUrl = (id: TemplateId, rest: string) => `/api/templates/${id}${rest}`;
+
+const templateSession = (id: TemplateId, videoUrl: string): EditSession => ({
+  id,
+  videoUrl,
+  backHref: "#/",
+  putDraft: async (draft) => {
+    await request("PUT", templateUrl(id, "/draft"), draftJson(draft), true);
+  },
+  save: async (body) => {
+    await request("POST", templateUrl(id, "/save"), body);
+  },
+});
+
+export interface OpenedEdit {
+  readonly draft: Draft;
+  readonly clip: ClipFacts;
+  readonly session: EditSession;
+}
+
+export async function openTemplateEdit(id: TemplateId, baseUrl: string): Promise<OpenedEdit> {
+  const view = parseTemplateDraftView(await request("GET", templateUrl(id, "/draft")));
+  const template = await loadTemplate(id, baseUrl);
+  return { clip: view.clip, draft: view.draft ?? importDraft(template), session: templateSession(id, template.videoUrl) };
+}

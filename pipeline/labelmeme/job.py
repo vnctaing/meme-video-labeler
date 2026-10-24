@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
 import unicodedata
@@ -13,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from labelmeme.schema import SLUG
+from labelmeme.schema import SLUG, write_atomic
 
 Step = Literal["download", "prepare"]
 STEPS: tuple[Step, ...] = ("download", "prepare")
@@ -290,15 +289,6 @@ def parse_job(raw: object) -> Job:
     return Job(job_id, _text(o.get("url"), "$.url"), _text(o.get("createdAt"), "$.createdAt"), _parse_state(o.get("state"), "$.state"))
 
 
-def write_atomic(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
 def derive_id(title: str, taken: set[str]) -> str:
     ascii_title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode().lower()
     words = re.findall(r"[a-z0-9]+", ascii_title)
@@ -381,6 +371,19 @@ class Jobs:
             if job.state.kind not in kinds:
                 raise Conflict(f"this needs the job to be {' or '.join(kinds)}, but it is {_describe(job.state)}")
             yield job
+
+    @contextmanager
+    def with_template_editable(self, template_id: str) -> Iterator[None]:
+        with self._lock:
+            if self._path(template_id).is_file():
+                try:
+                    state = self._load(template_id).state
+                except ValueError as e:
+                    log.warning("editing a template whose leftover job cannot be read: %s", e)
+                else:
+                    if state.kind != "ready":
+                        raise Conflict(f"this template's job is {_describe(state)}: finish or redo the job first")
+            yield
 
     def recover(self) -> list[Job]:
         pending = sorted((j for j in self.list() if is_running(j.state)), key=lambda j: j.created_at)

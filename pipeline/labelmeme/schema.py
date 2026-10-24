@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -94,8 +95,10 @@ def validate_template(t: WireTemplate) -> None:
         prev_end = 0
         for r, run in enumerate(subject["runs"]):
             rp = f"{sp}.runs[{r}]"
+            _require(isinstance(run, dict) and "from" in run and "boxes" in run, rp, f"expected {{from, boxes}}, got {run!r}")
             start, boxes = run["from"], run["boxes"]
             _require_int(start, f"{rp}.from", 0)
+            _require(isinstance(boxes, list), f"{rp}.boxes", f"expected a list of boxes, got {boxes!r}")
             _require(len(boxes) >= 1, f"{rp}.boxes", "a run needs at least one box")
             end = start + len(boxes)
             _require(start >= prev_end, f"{rp}.from", f"run starts at {start}, before the previous run ends at {prev_end}")
@@ -111,7 +114,7 @@ def validate_template(t: WireTemplate) -> None:
 
             for b, box in enumerate(boxes):
                 bp = f"{rp}.boxes[{b}]"
-                _require(len(box) == 4 and all(_is_int(v) for v in box), bp, f"expected 4 integers, got {box!r}")
+                _require(isinstance(box, list) and len(box) == 4 and all(_is_int(v) for v in box), bp, f"expected 4 integers, got {box!r}")
                 x, y, w, h = box
                 _require(w >= 1 and h >= 1, bp, f"w and h must be >= 1, got {box}")
                 _require(x >= 0 and y >= 0 and x + w <= width and y + h <= height, bp, f"box {box} is outside the {width}x{height} frame")
@@ -119,6 +122,24 @@ def validate_template(t: WireTemplate) -> None:
 
 def _dump(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False) + "\n"
+
+
+def write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _copy_atomic(src: Path, dst: Path) -> None:
+    tmp = dst.with_suffix(dst.suffix + ".tmp")
+    with open(src, "rb") as s, open(tmp, "wb") as d:
+        shutil.copyfileobj(s, d)
+        d.flush()
+        os.fsync(d.fileno())
+    os.replace(tmp, dst)
 
 
 def write_template(
@@ -132,11 +153,11 @@ def write_template(
     validate_template(template)
     out = templates_dir / template["id"]
     out.mkdir(parents=True, exist_ok=True)
-    (out / "template.json").write_text(_dump(template), encoding="utf-8")
-    (out / "SOURCE.md").write_text(source_md, encoding="utf-8")
+    write_atomic(out / "template.json", _dump(template))
+    write_atomic(out / "SOURCE.md", source_md)
     for src, name in ((video_path, "video.mp4"), (thumb_path, "thumb.jpg")):
         if src.resolve() != (out / name).resolve():
-            shutil.copyfile(src, out / name)
+            _copy_atomic(src, out / name)
     write_index(templates_dir)
     return out
 
@@ -158,4 +179,4 @@ def write_index(templates_dir: Path) -> None:
             }
         )
     index: WireIndex = {"version": 1, "templates": entries}
-    (templates_dir / "index.json").write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_atomic(templates_dir / "index.json", json.dumps(index, indent=2, ensure_ascii=False) + "\n")

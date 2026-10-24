@@ -60,6 +60,7 @@ export interface EditorState {
   readonly selected: SubjectId | null;
   readonly frame: FrameIndex;
   readonly stroke: Stroke | null;
+  readonly strokeFrom: FrameIndex | null;
   readonly brush: ReadonlyMap<SubjectId, number>;
 }
 
@@ -75,6 +76,7 @@ export function editorState({ doc, tuning }: Draft): EditorState {
     selected: doc.subjects[0]?.id ?? null,
     frame: 0 as FrameIndex,
     stroke: null,
+    strokeFrom: null,
     brush: new Map(),
   };
 }
@@ -188,7 +190,7 @@ export function reduce(s: EditorState, a: Action, clip: Clip): EditorState {
     case "strokeBegin": {
       if (s.selected === null || s.stroke !== null) return s;
       const stroke = { subject: s.selected, rate: a.rate, size: brushSize(s, s.selected, clip) };
-      return { ...s, stroke: { ...stroke, last: s.frame, cells: new Map([[s.frame, drawn(a.at, a.erase, stroke, clip)]]) } };
+      return { ...s, strokeFrom: s.frame, stroke: { ...stroke, last: s.frame, cells: new Map([[s.frame, drawn(a.at, a.erase, stroke, clip)]]) } };
     }
     case "strokeSample": {
       const stroke = s.stroke;

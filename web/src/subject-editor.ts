@@ -30,11 +30,12 @@ const DEFAULT_SPEED: Rate = 0.5;
 
 type Playback = "off" | "plain" | "result";
 
-type Command = "play" | "playResult" | "stepBack" | "stepForward" | "erase" | "smaller" | "bigger";
+type Command = "play" | "playResult" | "stepBack" | "stepForward" | "backToStroke" | "erase" | "smaller" | "bigger";
 
 const SHORTCUTS: readonly { readonly hint: string; readonly label: string; readonly keys: Readonly<Record<string, Command>> }[] = [
   { hint: "Space", label: "play / pause", keys: { " ": "play" } },
   { hint: "← →", label: "step a frame", keys: { ArrowLeft: "stepBack", ArrowRight: "stepForward" } },
+  { hint: "B", label: "back to where the last stroke began", keys: { b: "backToStroke", B: "backToStroke" } },
   { hint: "R", label: "play result", keys: { r: "playResult", R: "playResult" } },
   { hint: "E", label: "erase", keys: { e: "erase", E: "erase" } },
   { hint: "− +", label: "size", keys: { "-": "smaller", "+": "bigger", "=": "bigger" } },
@@ -115,6 +116,8 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   const playLabel = el("span", {}, "Play");
   const playButton = el("button", { type: "button", className: "play", ariaKeyShortcuts: "Space" }, playLabel, " ", el("kbd", {}, "Space"));
   const resultLabel = el("span", {}, "Play result");
+  const backLabel = el("span", {});
+  const backButton = el("button", { type: "button", className: "back-to-stroke", ariaKeyShortcuts: "B" }, backLabel, " ", el("kbd", {}, "B"));
   const resultButton = el("button", { type: "button", className: "play-result", ariaKeyShortcuts: "R" }, resultLabel, " ", el("kbd", {}, "R"));
   const speed = el(
     "select",
@@ -187,7 +190,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     stage,
     scrubber,
     keyHints,
-    el("div", { className: "transport" }, playButton, resultButton, el("label", { className: "slider", htmlFor: speed.id }, "Speed", speed), timecode, lag.field, smoothing.field),
+    el("div", { className: "transport" }, playButton, resultButton, backButton, el("label", { className: "slider", htmlFor: speed.id }, "Speed", speed), timecode, lag.field, smoothing.field),
     actions,
     hint,
     status,
@@ -309,6 +312,9 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     saveButton.title = blocker ?? "Write the template and open it";
     playLabel.textContent = playback === "plain" ? "Pause" : "Play";
     resultLabel.textContent = playback === "result" ? "Pause" : "Play result";
+    backButton.hidden = state.strokeFrom === null || state.strokeFrom === state.frame;
+    backButton.disabled = recording;
+    backLabel.textContent = `Back to frame ${state.strokeFrom ?? ""}`;
   };
 
   const renderFrame = () => {
@@ -566,7 +572,13 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     dispatch({ kind: "seek", frame: 0 });
     void video.play();
   };
+  const backToStroke = () => {
+    if (state.stroke !== null || state.strokeFrom === null) return;
+    stopPlaying();
+    dispatch({ kind: "seek", frame: state.strokeFrom });
+  };
   playButton.addEventListener("click", togglePlay);
+  backButton.addEventListener("click", backToStroke);
   resultButton.addEventListener("click", togglePlayResult);
   speed.addEventListener("change", () => speed.blur());
   lag.input.addEventListener("input", () => dispatch({ kind: "tune", tuning: { lagMs: Number(lag.input.value) } }));
@@ -614,6 +626,9 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
         if (state.stroke !== null) return;
         stopPlaying();
         dispatch({ kind: "step", delta: command === "stepBack" ? -1 : 1 });
+        return;
+      case "backToStroke":
+        backToStroke();
         return;
       case "erase":
         toggleErase();

@@ -174,3 +174,26 @@ describe("a subject with imported frames", () => {
     expect(track(run(drawn, { kind: "undo" }))).toBe(track(before));
   });
 });
+
+describe("two subjects from the same frame", () => {
+  test("selecting or adding a subject keeps the playhead where the stroke ended", () => {
+    const drawn = run(start([subject(1), subject(2)]), ...stroke(140, 160));
+    expect(drawn.frame).toBe(160);
+    expect(run(drawn, { kind: "select", id: id("s2") }).frame).toBe(160);
+    expect(run(drawn, { kind: "addSubject" }).frame).toBe(160);
+  });
+
+  test("the frame where the last stroke began survives its end, selection, adding and undo", () => {
+    expect(start().strokeFrom).toBeNull();
+    const drawn = run(start([subject(1), subject(2)]), ...stroke(140, 160));
+    expect(drawn.strokeFrom).toBe(140);
+    const moved = run(drawn, { kind: "select", id: id("s2") }, { kind: "addSubject" }, { kind: "undo" }, { kind: "step", delta: 1 });
+    expect(moved.strokeFrom).toBe(140);
+    const back = run(moved, { kind: "seek", frame: moved.strokeFrom ?? -1 });
+    expect(back.frame).toBe(140);
+    const second = run(back, { kind: "select", id: id("s2") }, { kind: "strokeBegin", at: [5, 5], erase: false, rate: 1 }, { kind: "strokeSample", frame: 150, at: [5, 5], erase: false }, { kind: "strokeEnd" });
+    expect(track(second, 2).findIndex((c) => c !== null)).toBe(140);
+    expect(second.strokeFrom).toBe(140);
+    expect(run(second, ...stroke(200, 210)).strokeFrom).toBe(200);
+  });
+});

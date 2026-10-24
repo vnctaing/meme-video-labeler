@@ -77,7 +77,7 @@ def test_the_first_edit_adds_only_the_draft_and_leaves_leftover_files_alone(tmp_
         assert client.put("/api/templates/fixture/draft", json=draft, headers=ORIGIN).status_code == 204
         assert client.get("/api/templates/fixture/draft").json()["draft"] == draft
     after = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in leftover.rglob("*") if p.is_file()}
-    assert {p.name for p in set(after) - set(before)} == {"draft.json"}
+    assert {p.name for p in set(after) - set(before)} == {"draft.json", "draft.base"}
     assert {p: after[p] for p in before} == before
 
 
@@ -263,3 +263,48 @@ def test_an_unreadable_leftover_job_does_not_block_editing_its_template(tmp_path
         assert client.post("/api/templates/fixture/save", json=body, headers=ORIGIN).status_code == 200
     assert _template(paths)["title"] == "Renamed"
     assert job_json.read_bytes() == content
+
+
+def _edit_template_outside(paths: Paths, name: str) -> None:
+    template = _template(paths)
+    template["subjects"][1]["name"] = name
+    (paths.templates_dir / "fixture/template.json").write_text(json.dumps(template, indent=2) + "\n", encoding="utf-8")
+
+
+def test_a_draft_older_than_an_outside_edit_is_moved_aside_and_the_template_opens(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    work = paths.work_dir / "fixture"
+    with TestClient(create_app(paths, 5184)) as client:
+        assert client.put("/api/templates/fixture/draft", json=_imported_draft(_template(paths)), headers=ORIGIN).status_code == 204
+        drafted = (work / "draft.json").read_bytes()
+        _edit_template_outside(paths, "Robert")
+        res = client.get("/api/templates/fixture/draft")
+    assert res.status_code == 200, res.text
+    assert res.json()["draft"] is None
+    assert not (work / "draft.json").exists()
+    assert [p.read_bytes() for p in work.glob("draft.stale-*.json")] == [drafted]
+    assert list(work.glob("draft.corrupt-*.json")) == []
+
+
+def test_a_draft_survives_saving_an_edit_from_it(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    template = _template(paths)
+    template["subjects"][1]["name"] = "Robert"
+    draft = _imported_draft(template)
+    draft["subjects"][0]["track"][3] = [120.5, 80.25, 40, 1]
+    with TestClient(create_app(paths, 5184)) as client:
+        assert client.put("/api/templates/fixture/draft", json=draft, headers=ORIGIN).status_code == 204
+        assert client.post("/api/templates/fixture/save", json=_save_body(template), headers=ORIGIN).status_code == 200
+        reopened = client.get("/api/templates/fixture/draft").json()["draft"]
+    assert reopened == draft
+
+
+def test_a_draft_from_before_bases_were_recorded_is_still_trusted(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    work = paths.work_dir / "fixture"
+    work.mkdir(parents=True)
+    draft = _imported_draft(_template(paths))
+    (work / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
+    _edit_template_outside(paths, "Robert")
+    with TestClient(create_app(paths, 5184)) as client:
+        assert client.get("/api/templates/fixture/draft").json()["draft"] == draft

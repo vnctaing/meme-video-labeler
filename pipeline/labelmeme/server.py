@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from labelmeme import youtube
 from labelmeme.build import build
 from labelmeme.draft import ClipFacts, clip_json, parse_draft, read_clip, read_draft, write_draft
-from labelmeme.edit import UnknownTemplate, open_template, read_draft_if_any, save_in_place
+from labelmeme.edit import UnknownTemplate, open_template, read_draft_if_any, save_in_place, write_draft_of
 from labelmeme.job import (
     DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
     UnknownJob, derive_id, is_running, parse_clip, state_json,
@@ -205,16 +205,15 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
     def get_template_draft(template_id: str) -> dict:
         with jobs.with_template_editable(template_id):
             _, clip = open_template(paths.templates_dir, template_id)
-            return {"draft": read_draft_if_any(paths.work_dir / template_id, clip), "clip": clip_json(clip)}
+            template_path = paths.templates_dir / template_id / "template.json"
+            return {"draft": read_draft_if_any(paths.work_dir / template_id, template_path, clip), "clip": clip_json(clip)}
 
     @app.put("/api/templates/{template_id}/draft", status_code=204)
     def put_template_draft(template_id: str, body: dict = Body(...)) -> None:
         with jobs.with_template_editable(template_id):
             _, clip = open_template(paths.templates_dir, template_id)
             draft = _parsed_draft(body, clip)
-            work = paths.work_dir / template_id
-            work.mkdir(parents=True, exist_ok=True)
-            write_draft(work, draft)
+            write_draft_of(paths.work_dir / template_id, paths.templates_dir / template_id / "template.json", draft)
 
     @app.post("/api/templates/{template_id}/save")
     def save_template(template_id: str, body: SaveTemplate) -> dict:
@@ -222,7 +221,7 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
             template, _ = open_template(paths.templates_dir, template_id)
             subjects = _subjects_of(body)
             try:
-                save_in_place(paths.templates_dir, template, body.title, subjects)
+                save_in_place(paths.templates_dir, paths.work_dir / template_id, template, body.title, subjects)
             except ValueError as e:
                 raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
             return {"id": template_id}

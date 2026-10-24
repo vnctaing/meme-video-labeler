@@ -93,7 +93,7 @@ try {
 
   await page.goto(`${APP}#/new/${FILLED}`);
   await page.locator("canvas.editor-canvas").waitFor();
-  const names = await page.locator("input.lane-name").evaluateAll((inputs) => inputs.map((i) => i.value));
+  const names = await page.locator(".lane-name").evaluateAll((ns) => ns.map((n) => n.textContent));
   assert(JSON.stringify(names) === JSON.stringify(["Alice", "Bob"]), `the ready job opens with its template's subjects, got ${JSON.stringify(names)}`);
   await page.screenshot({ path: path.join(OUT, "01-ready-filled.png") });
 

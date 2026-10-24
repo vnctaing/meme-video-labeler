@@ -1,5 +1,5 @@
 import { type Draft, type SaveBody, type SubjectDraft, importDraft } from "./subjects.ts";
-import { type SubjectId, type Template, type TemplateId, TemplateError, array, int, isRecord, loadTemplate, parseBox, record, slug, string } from "./template.ts";
+import { type SubjectId, type TemplateId, TemplateError, array, int, isRecord, loadTemplate, parseBox, record, slug, string } from "./template.ts";
 import { type Cell, type Clip as ClipFacts, HIDDEN, type Rate } from "./track.ts";
 
 export interface SourceFacts {
@@ -291,7 +291,7 @@ export const jobSession = (id: TemplateId): EditSession => ({
 
 const templateUrl = (id: TemplateId, rest: string) => `/api/templates/${id}${rest}`;
 
-export const templateSession = (id: TemplateId, videoUrl: string): EditSession => ({
+const templateSession = (id: TemplateId, videoUrl: string): EditSession => ({
   id,
   videoUrl,
   backHref: "#/",
@@ -306,10 +306,11 @@ export const templateSession = (id: TemplateId, videoUrl: string): EditSession =
 export interface OpenedEdit {
   readonly draft: Draft;
   readonly clip: ClipFacts;
-  readonly template: Template;
+  readonly session: EditSession;
 }
 
 export async function openTemplateEdit(id: TemplateId, baseUrl: string): Promise<OpenedEdit> {
-  const [template, view] = await Promise.all([loadTemplate(id, baseUrl), request("GET", templateUrl(id, "/draft")).then(parseTemplateDraftView)]);
-  return { template, clip: view.clip, draft: view.draft ?? importDraft(template) };
+  const view = parseTemplateDraftView(await request("GET", templateUrl(id, "/draft")));
+  const template = await loadTemplate(id, baseUrl);
+  return { clip: view.clip, draft: view.draft ?? importDraft(template), session: templateSession(id, template.videoUrl) };
 }

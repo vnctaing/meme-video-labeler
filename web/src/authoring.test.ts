@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ApiError, ServerNotAnswering, getJob, parseDraftView, parseJob, putDraft, shortNameToId } from "./authoring.ts";
+import { ApiError, ServerNotAnswering, getJob, openTemplateEdit, parseDraftView, parseJob, putDraft, shortNameToId } from "./authoring.ts";
 import { importDraft } from "./subjects.ts";
 import { TemplateError, type TemplateId, parseTemplate } from "./template.ts";
 
@@ -145,5 +145,55 @@ describe("putDraft of an imported template", () => {
     await putDraft("tos-lab" as TemplateId, importDraft(parseTemplate(json, "http://x/")));
     expect(new TextEncoder().encode(String(sent[0].body)).length).toBeLessThan(32_768);
     expect(sent[0].keepalive).toBe(true);
+  });
+});
+
+describe("openTemplateEdit", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const BASE = "http://x/";
+  const ID = "fixture" as TemplateId;
+  const templateJson = JSON.parse(readFileSync(new URL("../public/templates/fixture/template.json", import.meta.url), "utf8"));
+  const clip = { width: 640, height: 360, fps: 24, frameCount: 48, cuts: [24] };
+  const unsaved = { version: 1, title: "Unsaved title", tuning: { lagMs: 0, smoothRadius: 0 }, subjects: [{ id: "s1", name: "Carol", color: "#4c8dff", track: Array(48).fill(null) }] };
+
+  const serve = (draft: unknown) => {
+    const sent: { method: string; url: string }[] = [];
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+      const method = init.method ?? "GET";
+      sent.push({ method, url });
+      if (url === `${BASE}templates/fixture/template.json`) return Response.json(templateJson);
+      if (method === "GET" && url === "/api/templates/fixture/draft") return Response.json({ draft, clip });
+      if (method === "PUT" && url === "/api/templates/fixture/draft") return new Response(null, { status: 204 });
+      if (method === "POST" && url === "/api/templates/fixture/save") return Response.json({ id: "fixture" });
+      return Response.json({ error: `unexpected ${method} ${url}` }, { status: 404 });
+    });
+    return sent;
+  };
+
+  test("opens a template with no draft filled with its own subjects", async () => {
+    serve(null);
+    const opened = await openTemplateEdit(ID, BASE);
+    expect(opened.draft.doc.subjects.map((s) => s.name)).toEqual(["Alice", "Bob"]);
+    expect(opened.draft).toEqual(importDraft(parseTemplate(templateJson, BASE)));
+  });
+
+  test("reopens the unsaved draft instead of the template", async () => {
+    serve(unsaved);
+    const opened = await openTemplateEdit(ID, BASE);
+    expect(opened.draft.doc.title).toBe("Unsaved title");
+    expect(opened.draft.doc.subjects.map((s) => s.name)).toEqual(["Carol"]);
+  });
+
+  test("its session plays the template's video and writes the draft and the save to the template", async () => {
+    const sent = serve(null);
+    const { draft, session } = await openTemplateEdit(ID, BASE);
+    expect(session.videoUrl).toBe(`${BASE}templates/fixture/video.mp4`);
+    sent.length = 0;
+    await session.putDraft(draft);
+    await session.save({ title: "Fixture", subjects: [] });
+    expect(sent).toEqual([
+      { method: "PUT", url: "/api/templates/fixture/draft" },
+      { method: "POST", url: "/api/templates/fixture/save" },
+    ]);
   });
 });

@@ -248,17 +248,21 @@ describe("toWireBox", () => {
   });
 
   test("every box in the drawing domain is integer, inside the frame and matches the size", () => {
+    const bad: string[] = [];
     for (let size = 0.04 * TOS.height; size <= 0.11 * TOS.height; size += 1.7)
       for (let x = 0; x <= TOS.width; x += 7)
         for (let y = 0; y <= TOS.height; y += 5) {
           const box = toWireBox([x, y, size, 1], TOS);
           const [bx, by, bw, bh] = box;
-          expect(box.every(Number.isInteger)).toBe(true);
-          expect(bw >= 1 && bh >= 1 && bx >= 0 && by >= 0 && bx + bw <= TOS.width && by + bh <= TOS.height).toBe(true);
           const l = layoutLabel(measure, "BOB", { x: bx, y: by, w: bw, h: bh }, TOS.width, TOS.height);
-          expect(Math.abs(l.fontPx - size)).toBeLessThanOrEqual(0.15);
-          if (x >= bw / 2 && x <= TOS.width - bw / 2) expect(Math.abs(bx + bw / 2 - x)).toBeLessThanOrEqual(0.5);
+          const ok =
+            box.every(Number.isInteger) &&
+            bw >= 1 && bh >= 1 && bx >= 0 && by >= 0 && bx + bw <= TOS.width && by + bh <= TOS.height &&
+            Math.abs(l.fontPx - size) <= 0.15 &&
+            (x < bw / 2 || x > TOS.width - bw / 2 || Math.abs(bx + bw / 2 - x) <= 0.5);
+          if (!ok && bad.length < 5) bad.push(`[${x}, ${y}, ${size}] -> [${box.join(", ")}] font ${l.fontPx}`);
         }
+    expect(bad).toEqual([]);
   });
 
   test("clamps at the edges and keeps the readable-size floor", () => {

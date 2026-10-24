@@ -382,6 +382,15 @@ class Jobs:
                 raise Conflict(f"this needs the job to be {' or '.join(kinds)}, but it is {_describe(job.state)}")
             yield job
 
+    @contextmanager
+    def with_template_editable(self, template_id: str) -> Iterator[None]:
+        with self._lock:
+            if self._path(template_id).is_file():
+                state = self._load(template_id).state
+                if state.kind != "ready":
+                    raise Conflict(f"this template's job is {_describe(state)}: finish or redo the job first")
+            yield
+
     def recover(self) -> list[Job]:
         pending = sorted((j for j in self.list() if is_running(j.state)), key=lambda j: j.created_at)
         for job in pending:

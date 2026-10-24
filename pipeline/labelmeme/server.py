@@ -15,7 +15,8 @@ from pydantic import BaseModel, Field, StringConstraints
 
 from labelmeme import youtube
 from labelmeme.build import build
-from labelmeme.draft import clip_json, parse_draft, read_clip, read_draft, write_draft
+from labelmeme.draft import ClipFacts, clip_json, parse_draft, read_clip, read_draft, write_draft
+from labelmeme.edit import UnknownTemplate, open_template, read_draft_if_any, save_in_place
 from labelmeme.job import (
     DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
     UnknownJob, derive_id, is_running, parse_clip, state_json,
@@ -64,6 +65,22 @@ def _source_of(job: Job) -> SourceFacts:
     return state.source
 
 
+def _subjects_of(body: SaveTemplate) -> list[dict]:
+    if not body.subjects:
+        raise ApiError(422, "draw at least one subject", "subjects")
+    for i, s in enumerate(body.subjects):
+        if s.name.strip() == "":
+            raise ApiError(422, "every drawn subject needs a name", f"subjects[{i}].name")
+    return [{"id": s.id, "name": s.name.strip(), "runs": s.runs} for s in body.subjects]
+
+
+def _parsed_draft(body: dict, clip: ClipFacts) -> dict:
+    try:
+        return parse_draft(body, clip)
+    except ValueError as e:
+        raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
+
+
 def create_app(paths: Paths, web_port: int) -> FastAPI:
     allowed_origins = {f"http://localhost:{web_port}", f"http://127.0.0.1:{web_port}"}
     worker = Worker(paths)
@@ -103,6 +120,10 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
     @app.exception_handler(UnknownJob)
     async def unknown(_: Request, e: UnknownJob):
         return JSONResponse({"error": f"no job named {e.args[0]!r}", "field": None}, status_code=404)
+
+    @app.exception_handler(UnknownTemplate)
+    async def unknown_template(_: Request, e: UnknownTemplate):
+        return JSONResponse({"error": f"no template named {e.args[0]!r}", "field": None}, status_code=404)
 
     def job_out(job: Job) -> dict:
         progress = worker.progress(job.id) if is_running(job.state) else None
@@ -166,21 +187,12 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
     def put_draft(job_id: str, body: dict = Body(...)) -> None:
         with jobs.with_settled(job_id, ("editing", "ready")):
             work = paths.work_dir / job_id
-            try:
-                draft = parse_draft(body, read_clip(work))
-            except ValueError as e:
-                raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
-            write_draft(work, draft)
+            write_draft(work, _parsed_draft(body, read_clip(work)))
 
     @app.post("/api/jobs/{job_id}/save")
     def save(job_id: str, body: SaveTemplate) -> dict:
         with jobs.with_settled(job_id, ("editing", "ready")):
-            if not body.subjects:
-                raise ApiError(422, "draw at least one subject", "subjects")
-            for i, s in enumerate(body.subjects):
-                if s.name.strip() == "":
-                    raise ApiError(422, "every drawn subject needs a name", f"subjects[{i}].name")
-            subjects = [{"id": s.id, "name": s.name.strip(), "runs": s.runs} for s in body.subjects]
+            subjects = _subjects_of(body)
             started = time.perf_counter()
             try:
                 build(paths.work_dir / job_id, paths.templates_dir, body.title, subjects)
@@ -188,6 +200,32 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
                 raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
             log.info("saved %s in %.2f s", job_id, time.perf_counter() - started)
             return job_out(jobs.transition(job_id, Saved()))
+
+    @app.get("/api/templates/{template_id}/draft")
+    def get_template_draft(template_id: str) -> dict:
+        with jobs.with_template_editable(template_id):
+            _, clip = open_template(paths.templates_dir, template_id)
+            return {"draft": read_draft_if_any(paths.work_dir / template_id, clip), "clip": clip_json(clip)}
+
+    @app.put("/api/templates/{template_id}/draft", status_code=204)
+    def put_template_draft(template_id: str, body: dict = Body(...)) -> None:
+        with jobs.with_template_editable(template_id):
+            _, clip = open_template(paths.templates_dir, template_id)
+            draft = _parsed_draft(body, clip)
+            work = paths.work_dir / template_id
+            work.mkdir(parents=True, exist_ok=True)
+            write_draft(work, draft)
+
+    @app.post("/api/templates/{template_id}/save")
+    def save_template(template_id: str, body: SaveTemplate) -> dict:
+        with jobs.with_template_editable(template_id):
+            template, _ = open_template(paths.templates_dir, template_id)
+            subjects = _subjects_of(body)
+            try:
+                save_in_place(paths.templates_dir, template, body.title, subjects)
+            except ValueError as e:
+                raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
+            return {"id": template_id}
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry(job_id: str) -> dict:

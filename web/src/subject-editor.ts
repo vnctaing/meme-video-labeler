@@ -28,7 +28,7 @@ const SVG_NS = "http://www.w3.org/2000/svg";
 const SPEEDS: readonly Rate[] = [0.25, 0.5, 1];
 const DEFAULT_SPEED: Rate = 0.5;
 
-type Playback = "off" | "plain" | "result";
+type PlayMode = "plain" | "result";
 
 type Command = "play" | "playResult" | "stepBack" | "stepForward" | "backToStroke" | "erase" | "smaller" | "bigger";
 
@@ -85,12 +85,13 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   let putTimer = 0;
   let inflight: Promise<void> = Promise.resolve();
   let frameRequest: number | null = null;
-  let playback: Playback = "off";
+  let playMode: PlayMode = "plain";
   let eraseToggle = false;
   let altHeld = false;
   let pointer: readonly [number, number] | null = null;
   const touchOnly = matchMedia("(pointer: coarse)").matches;
   const erasing = () => altHeld || eraseToggle;
+  const playing = (): PlayMode | null => (video.paused || state.stroke !== null ? null : playMode);
   const pct = (f: number) => `${(100 * f) / clip.frameCount}%`;
   const scale = clip.width / 1280;
 
@@ -249,7 +250,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   const paint = () => {
     const t = toTemplate(runs, state, clip, id, videoUrl);
     paintFrame(ctx, (c) => c.drawImage(video, 0, 0, clip.width, clip.height), t, labelsOf(state.doc), state.frame);
-    if (playback !== "result") {
+    if (playing() !== "result") {
       strokePaths();
       const s = selectedDoc();
       if (s !== null && pointer !== null) cursorLabel(s, pointer);
@@ -264,7 +265,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   };
 
   const renderMode = () => {
-    const mode = modeOf(state, clip, { playing: playback === "result", erasing: erasing() });
+    const mode = modeOf(state, clip, { playing: playing() === "result", erasing: erasing() });
     stage.dataset.mode = mode.kind;
     emptyPrompt.hidden = mode.kind !== "empty";
     actions.hidden = mode.kind === "empty";
@@ -310,8 +311,8 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
     const blocker = saveBlocker(state, runs);
     saveButton.disabled = blocker !== null;
     saveButton.title = blocker ?? "Write the template and open it";
-    playLabel.textContent = playback === "plain" ? "Pause" : "Play";
-    resultLabel.textContent = playback === "result" ? "Pause" : "Play result";
+    playLabel.textContent = playing() === "plain" ? "Pause" : "Play";
+    resultLabel.textContent = playing() === "result" ? "Pause" : "Play result";
     backButton.hidden = state.strokeFrom === null || state.strokeFrom === state.frame;
     backButton.disabled = recording;
     backLabel.textContent = `Back to frame ${state.strokeFrom ?? ""}`;
@@ -462,14 +463,9 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
 
   const currentSpeed = (): Rate => SPEEDS.find((r) => String(r) === speed.value) ?? DEFAULT_SPEED;
 
-  const stopPlaying = () => {
-    playback = "off";
-    video.pause();
-  };
-
   scrubber.addEventListener("pointerdown", (ev) => {
     if (state.stroke !== null) return;
-    stopPlaying();
+    video.pause();
     scrubber.setPointerCapture(ev.pointerId);
     seekFromPointer(ev);
   });
@@ -495,22 +491,19 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   frameRequest = video.requestVideoFrameCallback(onVideoFrame);
   video.addEventListener("loadeddata", paint);
   video.addEventListener("seeked", paint);
-  video.addEventListener("pause", () => {
-    if (playback === "off") return;
-    playback = "off";
-    renderFrame();
-  });
+  video.addEventListener("play", renderFrame);
+  video.addEventListener("pause", renderFrame);
   video.addEventListener("ended", () => {
     endStroke();
-    playback = "off";
     renderFrame();
   });
 
   canvas.addEventListener("pointerdown", (ev) => {
     if (ev.pointerType === "mouse" && ev.button !== 0) return;
     ev.preventDefault();
-    if (playback !== "off") stopPlaying();
-    if (state.selected === null || state.stroke !== null || state.frame >= clip.frameCount - 1) return;
+    if (state.stroke !== null) return;
+    video.pause();
+    if (state.selected === null || state.frame >= clip.frameCount - 1) return;
     canvas.setPointerCapture(ev.pointerId);
     pointer = toTemplatePx(ev);
     altHeld = ev.altKey;
@@ -545,14 +538,12 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
 
   const togglePlay = () => {
     if (state.stroke !== null) return;
-    if (playback === "plain") {
-      stopPlaying();
-      renderFrame();
+    if (playing() === "plain") {
+      video.pause();
       return;
     }
-    stopPlaying();
     if (state.frame >= clip.frameCount - 1) dispatch({ kind: "seek", frame: 0 });
-    playback = "plain";
+    playMode = "plain";
     video.playbackRate = 1;
     void video.play();
     renderFrame();
@@ -560,13 +551,11 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
 
   const togglePlayResult = () => {
     if (state.stroke !== null) return;
-    if (playback === "result") {
-      stopPlaying();
-      renderFrame();
+    if (playing() === "result") {
+      video.pause();
       return;
     }
-    stopPlaying();
-    playback = "result";
+    playMode = "result";
     video.playbackRate = 1;
     video.currentTime = 0;
     dispatch({ kind: "seek", frame: 0 });
@@ -574,7 +563,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
   };
   const backToStroke = () => {
     if (state.stroke !== null || state.strokeFrom === null) return;
-    stopPlaying();
+    video.pause();
     dispatch({ kind: "seek", frame: state.strokeFrom });
   };
   playButton.addEventListener("click", togglePlay);
@@ -624,7 +613,7 @@ export function mountSubjectEditor(container: HTMLElement, session: EditSession,
       case "stepBack":
       case "stepForward":
         if (state.stroke !== null) return;
-        stopPlaying();
+        video.pause();
         dispatch({ kind: "step", delta: command === "stepBack" ? -1 : 1 });
         return;
       case "backToStroke":

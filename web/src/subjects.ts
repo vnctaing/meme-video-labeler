@@ -4,6 +4,7 @@ import {
   type Cell,
   type Clip,
   DEFAULT_SIZE_PER_HEIGHT,
+  DEFAULT_TUNING,
   HIDDEN,
   type Rate,
   SIZE_STEP,
@@ -100,6 +101,15 @@ export function newSubject(existing: readonly SubjectDraft[], frameCount: number
   let n = 1;
   while (ids.has(`s${n}` as SubjectId)) n++;
   return { id: `s${n}` as SubjectId, name: `Subject ${n}`, color: COLORS[(n - 1) % COLORS.length], track: Array<Cell>(frameCount).fill(null) };
+}
+
+export function importDraft(t: Template): Draft {
+  const subjects = t.subjects.map((x, i): SubjectDraft => {
+    const track = Array<Cell>(t.frameCount).fill(null);
+    for (const run of x.runs) run.boxes.forEach(({ x: bx, y, w, h }, j) => (track[run.from + j] = { box: [bx, y, w, h] }));
+    return { id: x.id, name: x.name, color: COLORS[i % COLORS.length], track };
+  });
+  return { doc: { title: t.title, subjects }, tuning: DEFAULT_TUNING };
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);

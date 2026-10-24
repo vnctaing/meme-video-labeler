@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ApiError, ServerNotAnswering, getJob, parseJob, shortNameToId } from "./authoring.ts";
-import { TemplateError, type TemplateId } from "./template.ts";
+import { ApiError, ServerNotAnswering, getJob, parseDraftView, parseJob, putDraft, shortNameToId } from "./authoring.ts";
+import { importDraft } from "./subjects.ts";
+import { TemplateError, type TemplateId, parseTemplate } from "./template.ts";
 
 const SOURCE = {
   videoId: "R6MlUcmOul8",
@@ -93,5 +95,55 @@ describe("shortNameToId", () => {
   test("stays within 40 characters without a trailing dash", () => {
     const id = shortNameToId("a".repeat(39) + " bcd");
     expect(id).toBe("a".repeat(39));
+  });
+});
+
+describe("draft cells", () => {
+  const clip = { width: 640, height: 360, fps: 24, frameCount: 3, cuts: [] };
+  const view = (cell: unknown) => ({
+    clip,
+    draft: { version: 1, title: "T", tuning: { lagMs: 150, smoothRadius: 4 }, subjects: [{ id: "s1", name: "A", color: "#f5a524", track: [null, "hidden", cell] }] },
+  });
+  const cellOf = (cell: unknown) => parseDraftView(view(cell)).draft.doc.subjects[0].track[2];
+  const failurePath = (cell: unknown) => {
+    try {
+      parseDraftView(view(cell));
+    } catch (e) {
+      if (e instanceof TemplateError) return e.path;
+      throw e;
+    }
+    return null;
+  };
+
+  test("a box cell is an imported frame and keeps its box as written", () => {
+    expect(cellOf({ box: [0, 10, 640, 350] })).toEqual({ box: [0, 10, 640, 350] });
+    expect(cellOf([10.5, 20, 30.2, 0.5])).toEqual([10.5, 20, 30.2, 0.5]);
+  });
+
+  test.each([
+    [{ box: [1.5, 0, 10, 10] }, "$.draft.subjects[0].track[2].box[0]"],
+    [{ box: [0, 0, 0, 10] }, "$.draft.subjects[0].track[2].box[2]"],
+    [{ box: [600, 0, 41, 10] }, "$.draft.subjects[0].track[2].box"],
+    [{ box: [0, 0, 10, 10], rate: 1 }, "$.draft.subjects[0].track[2].rate"],
+    [{}, "$.draft.subjects[0].track[2].box"],
+    [[0, 0, 10, 10], "$.draft.subjects[0].track[2][3]"],
+  ])("rejects %j at its path", (cell, path) => {
+    expect(failurePath(cell)).toBe(path);
+  });
+});
+
+describe("putDraft of an imported template", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("tos-lab's import stays small enough to be written while the page closes", async () => {
+    const json = JSON.parse(readFileSync(new URL("../public/templates/tos-lab/template.json", import.meta.url), "utf8"));
+    const sent: RequestInit[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      sent.push(init);
+      return new Response(null, { status: 204 });
+    });
+    await putDraft("tos-lab" as TemplateId, importDraft(parseTemplate(json, "http://x/")));
+    expect(new TextEncoder().encode(String(sent[0].body)).length).toBeLessThan(32_768);
+    expect(sent[0].keepalive).toBe(true);
   });
 });

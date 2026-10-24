@@ -5,7 +5,11 @@ export const HIDDEN = "hidden";
 export const RATES = [0.25, 0.5, 1] as const;
 export type Rate = (typeof RATES)[number];
 export type Sample = readonly [x: number, y: number, size: number, rate: Rate];
-export type Cell = Sample | typeof HIDDEN | null;
+export interface Imported {
+  readonly box: WireBox;
+}
+export type Placed = Sample | Imported;
+export type Cell = Placed | typeof HIDDEN | null;
 export type Track = readonly Cell[];
 
 export interface Clip {
@@ -32,6 +36,8 @@ export const SIZE_STEP = 1.08;
 export const DEFAULT_SIZE_PER_HEIGHT = 0.06;
 
 export const isSample = (c: Cell): c is Sample => Array.isArray(c);
+export const isImported = (c: Cell): c is Imported => typeof c === "object" && c !== null && !Array.isArray(c);
+export const isPlaced = (c: Cell): c is Placed => isSample(c) || isImported(c);
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 

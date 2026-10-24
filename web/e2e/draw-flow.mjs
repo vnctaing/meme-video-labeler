@@ -111,7 +111,7 @@ const client = async ([x, y]) => {
   return [box.x + (x * box.width) / W, box.y + (y * box.height) / H];
 };
 const laneOf = async (name) => {
-  const id = await page.locator(".lane").evaluateAll((ls, n) => ls.find((l) => l.querySelector("input.lane-name").value === n)?.dataset.subject, name);
+  const id = await page.locator(".lane").evaluateAll((ls, n) => ls.find((l) => l.querySelector(".lane-name").textContent === n)?.dataset.subject, name);
   if (id === undefined) throw new Error(`no lane named ${name}`);
   return page.locator(`.lane[data-subject="${id}"]`);
 };
@@ -131,15 +131,19 @@ const seekTo = async (target, name) => {
 };
 const draftPut = () =>
   page.waitForResponse((r) => r.request().method() === "PUT" && [`/api/jobs/${ID}/draft`, `/api/templates/${ID}/draft`].some((u) => r.url().endsWith(u)));
-const addSubject = async (name, button) => {
-  await button.click();
-  const focused = await page.evaluate(() => {
-    const a = document.activeElement;
-    return { cls: a?.className, value: a?.value, all: a?.selectionStart === 0 && a?.selectionEnd === a?.value.length };
-  });
-  assert(focused.cls === "lane-name" && /^Subject \d+$/.test(focused.value) && focused.all, `the new subject's name field is focused with "${focused.value}" selected`);
+async function rename(lane, name) {
+  await lane.locator(".lane-name").dblclick();
+  const field = lane.locator("input.lane-rename");
+  assert(await field.evaluate((n) => document.activeElement === n && n.selectionStart === 0 && n.selectionEnd === n.value.length), "a double-click on the name opens it for typing, all selected");
   await page.keyboard.type(name);
   await page.keyboard.press("Enter");
+  assert(await page.evaluate(() => document.activeElement === document.body), `Enter after typing ${name} gives the keyboard back to the shortcuts`);
+}
+const addSubject = async (name) => {
+  await page.locator(".timeline button.add-subject").click();
+  assert(await page.evaluate(() => document.activeElement === document.body), "+ Add subject focuses nothing, so the shortcuts keep working");
+  assert(/^Subject \d+$/.test(await page.locator(".lane.selected .lane-name").textContent()), "the new subject is selected with a placeholder name");
+  await rename(page.locator(".lane.selected"), name);
   await page.getByText(`Hold the mouse on ${name} and follow it`).waitFor();
   log(`PASS the banner reads "Hold the mouse on ${name} and follow it"`);
 };
@@ -202,6 +206,7 @@ const saveAndOpen = async () => {
   for (let i = 0; i < 50 && !(await fetch(`${APP}templates/${ID}/template.json`)).headers.get("content-type")?.includes("json"); i++) await page.waitForTimeout(100);
 };
 const setSlider = async (sel, value) => {
+  if (!(await page.locator("#tuning").evaluate((n) => n.matches(":popover-open")))) await page.locator("button.tuning-toggle").click();
   const put = draftPut();
   await page.locator(sel).fill(String(value));
   await put;
@@ -234,7 +239,7 @@ try {
   assert(await page.getByText("Move to the frame where your first subject appears").isVisible(), "the empty state asks for the first subject");
   await shot("empty");
 
-  await addSubject(BARLEY.name, page.locator(".empty-prompt button.add-first"));
+  await addSubject(BARLEY.name);
   assert((await page.locator("#speed").inputValue()) === "0.5", "the speed select is 0.5x");
   await settled();
   await shot("barley-follow");
@@ -276,7 +281,7 @@ try {
   await seekTo(160, BARLEY.name);
   await shot("erased");
 
-  await addSubject(THOM.name, page.locator(".timeline button.add-subject"));
+  await addSubject(THOM.name);
   await seekTo(326, THOM.name);
   await follow(THOM);
   draft = await getDraft();
@@ -321,8 +326,9 @@ try {
   assert(same(trackOf(await getDraft(), BARLEY.name), kept), "Undo brings back the frames the Erase button hid");
 
   for (const [button, verb] of [["button.clear", "Cleared"], ["button.delete", "Deleted"]]) {
-    await (await laneOf(THOM.name)).locator("input.lane-name").focus();
-    await page.locator(button).click();
+    const lane = await laneOf(THOM.name);
+    await lane.locator(".lane-head").hover();
+    await lane.locator(button).click();
     await page.getByText(`${verb} ${THOM.name}.`).waitFor();
     log(`PASS the notice reads "${verb} ${THOM.name}. Undo"`);
     await shot(verb.toLowerCase());
@@ -348,7 +354,7 @@ try {
   const before = await getDraft();
   await page.reload();
   await page.locator(".lane").nth(1).waitFor();
-  const laneNames = await page.locator("input.lane-name").evaluateAll((ns) => ns.map((n) => n.value));
+  const laneNames = await page.locator(".lane-name").evaluateAll((ns) => ns.map((n) => n.textContent));
   assert(same(laneNames, [BARLEY.name, THOM.name]), `after a reload the lanes are ${laneNames.join(", ")}`);
   assert(same(await getDraft(), before), "after a reload the draft is the one saved before it");
   assert((await page.locator("#lag").inputValue()) === "150" && (await page.locator("#smoothing").inputValue()) === "4", "after a reload the sliders show 150 ms and 4");

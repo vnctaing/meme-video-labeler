@@ -1,8 +1,8 @@
 import {
   ApiError,
   type Clip,
-  type EditSession,
   type Job,
+  type OpenedEdit,
   type JobState,
   type Running,
   ServerNotAnswering,
@@ -17,19 +17,10 @@ import {
   retry,
   shortNameToId,
   sourceUrl,
-  templateSession,
 } from "./authoring.ts";
 import { type View, el } from "./dom.ts";
-import type { Draft } from "./subjects.ts";
-import type { Clip as ClipFacts } from "./track.ts";
 import { mountSubjectEditor } from "./subject-editor.ts";
 import type { TemplateId } from "./template.ts";
-
-interface Opened {
-  readonly draft: Draft;
-  readonly clip: ClipFacts;
-  readonly session: EditSession;
-}
 
 const BASE_URL = new URL(import.meta.env.BASE_URL, location.href).href;
 const MAX_CLIP_SECONDS = 30;
@@ -182,7 +173,7 @@ function stepPanel(job: Job, show: (job: Job) => void): Panel {
       );
     case "ready":
       return editorPanel(
-        openTemplateEdit(job.id, BASE_URL).then((opened) => ({ ...opened, session: templateSession(job.id, opened.template.videoUrl) })),
+        openTemplateEdit(job.id, BASE_URL),
         changeClipLink(job.id, state.source, state.clip, show),
       );
     case "failed":
@@ -382,7 +373,7 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
   );
 }
 
-function editorPanel(opening: Promise<Opened>, below: HTMLElement | null): Panel {
+function editorPanel(opening: Promise<OpenedEdit>, below: HTMLElement | null): Panel {
   const node = el("section", { className: "subject-editor" }, el("p", { role: "status" }, "Loading the editor…"));
   let alive = true;
   let destroy = () => {};
@@ -393,7 +384,7 @@ function editorPanel(opening: Promise<Opened>, below: HTMLElement | null): Panel
       destroy = mountSubjectEditor(node, opened.session, opened).destroy;
       if (below !== null) node.append(below);
     })
-    .catch((e: unknown) => node.replaceChildren(el("p", { className: "field-error" }, message(e)), el("a", { href: "#/" }, "Back to all clips")));
+    .catch((e: unknown) => node.replaceChildren(el("p", { className: "field-error" }, message(e)), below ?? "", el("a", { href: "#/" }, "Back to all clips")));
   return {
     node,
     teardown: () => {
@@ -404,10 +395,7 @@ function editorPanel(opening: Promise<Opened>, below: HTMLElement | null): Panel
 }
 
 export async function editTemplateView(id: TemplateId): Promise<View> {
-  const panel = editorPanel(
-    openTemplateEdit(id, BASE_URL).then((opened) => ({ ...opened, session: templateSession(id, opened.template.videoUrl) })),
-    null,
-  );
+  const panel = editorPanel(openTemplateEdit(id, BASE_URL), null);
   return { nodes: [el("main", { className: "author" }, panel.node)], teardown: panel.teardown };
 }
 

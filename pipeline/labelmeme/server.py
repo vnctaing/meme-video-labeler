@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 
-from labelmeme import youtube
+from labelmeme import upload, youtube
 from labelmeme.build import build
 from labelmeme.draft import ClipFacts, clip_json, parse_draft, read_clip, read_draft, write_draft
 from labelmeme.edit import UnknownTemplate, open_template, read_draft_if_any, save_in_place, write_draft_of
@@ -32,7 +32,6 @@ log = logging.getLogger("labelmeme.server")
 
 COOKIE = "labelmeme_author"
 COOKIE_MAX_AGE = 30 * 24 * 60 * 60
-MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9-]+$", max_length=40)]
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -111,6 +110,7 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
     async def lifespan(_: FastAPI):
         paths.work_dir.mkdir(parents=True, exist_ok=True)
         paths.templates_dir.mkdir(parents=True, exist_ok=True)
+        upload.sweep(paths)
         if site_dir is not None:
             for template_id in seed_templates(site_dir / "templates", paths.templates_dir):
                 log.info("seeded template %s", template_id)
@@ -180,7 +180,7 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
 
     @app.get("/api/session")
     def session() -> dict:
-        return {"maxUploadBytes": MAX_UPLOAD_BYTES}
+        return {"maxUploadBytes": upload.MAX_UPLOAD_BYTES}
 
     @app.get("/api/jobs")
     def list_jobs() -> list[dict]:
@@ -278,6 +278,7 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
     def retry(job_id: str) -> dict:
         return job_out(jobs.transition(job_id, Retry()))
 
+    app.include_router(upload.router(jobs, paths, job_out))
     if site_dir is not None:
         app.mount("/templates", StaticFiles(directory=paths.templates_dir, check_dir=False))
         app.mount("/", StaticFiles(directory=site_dir, html=True))

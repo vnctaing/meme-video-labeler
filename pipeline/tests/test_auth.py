@@ -117,3 +117,10 @@ def test_a_fresh_data_dir_gets_the_seed_templates(tmp_path: Path) -> None:
     with TestClient(create_app(paths, 5184, password="pw", site_dir=site)) as client:
         assert [t["id"] for t in client.get("/templates/index.json").json()["templates"]] == ["fixture"]
     assert (paths.templates_dir / "fixture/video.mp4").read_bytes() == (FIXTURE / "video.mp4").read_bytes()
+
+
+def test_a_signed_in_upload_becomes_a_downloaded_job(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        res = client.post("/api/uploads?name=Fixture.mp4", content=(FIXTURE / "video.mp4").read_bytes(), headers=SIGNED_IN)
+    assert res.status_code == 201, res.text
+    assert res.json()["state"]["kind"] == "downloaded"

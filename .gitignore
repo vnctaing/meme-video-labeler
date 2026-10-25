@@ -10,3 +10,7 @@ web/dist
 pipeline/.venv
 pipeline/work/
 pipeline/models/
+/web/public/templates/game-of-thrones-season-6-episode-5-clip/video.mp4
+/web/public/templates/game-of-thrones-season-6-episode-5-clip/thumb.jpg
+/web/public/templates/kakashi-vs-obito/video.mp4
+/web/public/templates/kakashi-vs-obito/thumb.jpg

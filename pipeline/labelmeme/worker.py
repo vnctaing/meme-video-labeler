@@ -69,9 +69,12 @@ class Worker:
             with self._pending_lock:
                 self._pending.discard(job_id)
             try:
-                job = jobs.get(job_id)
+                job = jobs.start_step(job_id)
             except Exception:
                 log.exception("cannot read job %s", job_id)
+                continue
+            if job is None:
+                self._progress.pop(job_id, None)
                 continue
             try:
                 self._report(job_id, 0, None)

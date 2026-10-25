@@ -7,7 +7,7 @@ const apiPort = process.env.AUTHOR_API_PORT ?? "8787";
 const webPort = process.env.AUTHOR_WEB_PORT ?? "5174";
 const children = [
   spawn("uv", ["run", "python", "-m", "labelmeme", "serve", "--port", apiPort, "--web-port", webPort], { cwd: path.join(web, "../pipeline"), stdio: "inherit" }),
-  spawn("npx", ["vite", "--port", webPort, "--strictPort"], { cwd: web, stdio: "inherit", env: { ...process.env, VITE_AUTHOR: "1", AUTHOR_API_PORT: apiPort } }),
+  spawn("npx", ["vite", "--port", webPort, "--strictPort"], { cwd: web, stdio: "inherit", env: { ...process.env, AUTHOR_API_PORT: apiPort } }),
 ];
 
 let exiting = false;

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { ApiError, ServerNotAnswering, getJob, openTemplateEdit, parseDraftView, parseJob, putDraft, shortNameToId } from "./authoring.ts";
+import { ApiError, ServerNotAnswering, defaultCredit, getJob, listJobs, openTemplateEdit, parseDraftView, parseJob, putDraft, shortNameToId, uploadJob, uploadProblem } from "./authoring.ts";
 import { importDraft } from "./subjects.ts";
 import { TemplateError, type TemplateId, parseTemplate } from "./template.ts";
 
@@ -195,5 +195,127 @@ describe("openTemplateEdit", () => {
       { method: "PUT", url: "/api/templates/fixture/draft" },
       { method: "POST", url: "/api/templates/fixture/save" },
     ]);
+  });
+});
+
+const UPLOADED = {
+  videoId: "upload-3f2a9c0d1e4b5a67",
+  url: "upload:Robot dance.mov",
+  title: "Robot dance",
+  channel: "uploaded file",
+  duration: 92.4,
+  width: 1920,
+  height: 1080,
+};
+
+describe("defaultCredit", () => {
+  test("an uploaded file is not credited to YouTube", () => {
+    expect(defaultCredit(UPLOADED)).toBe("Robot dance, uploaded file");
+  });
+
+  test("a YouTube video keeps its YouTube credit", () => {
+    expect(defaultCredit(SOURCE)).toBe("Tears of Steel - Blender VFX Open Movie, Blender, YouTube");
+  });
+});
+
+describe("uploadProblem", () => {
+  const MB = 1024 * 1024;
+  test("a file at the cap is fine", () => {
+    expect(uploadProblem(200 * MB, 200 * MB)).toBeNull();
+  });
+
+  test("a file one byte over the cap names both sizes", () => {
+    expect(uploadProblem(200 * MB + 1, 200 * MB)).toBe("This file is 200.0 MB, and the limit is 200 MB. Choose a shorter or smaller video.");
+  });
+
+  test("an empty file is refused", () => {
+    expect(uploadProblem(0, 200 * MB)).toBe("This file is empty.");
+  });
+});
+
+class FakeXhr {
+  static last: FakeXhr | null = null;
+  static reply: { status: number; body: string } | "network error" = { status: 201, body: "" };
+  method = "";
+  url = "";
+  body: unknown = null;
+  status = 0;
+  responseText = "";
+  readonly upload: { onprogress: ((ev: { loaded: number; total: number; lengthComputable: boolean }) => void) | null } = { onprogress: null };
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor() {
+    FakeXhr.last = this;
+  }
+  open(method: string, url: string) {
+    this.method = method;
+    this.url = url;
+  }
+  send(body: unknown) {
+    this.body = body;
+    this.upload.onprogress?.({ loaded: 5, total: 10, lengthComputable: true });
+    const reply = FakeXhr.reply;
+    queueMicrotask(() => {
+      if (reply === "network error") return this.onerror?.();
+      this.status = reply.status;
+      this.responseText = reply.body;
+      this.onload?.();
+    });
+  }
+}
+
+describe("uploadJob", () => {
+  const file = new File([new Uint8Array(10)], "Robot dance.mov", { type: "video/quicktime" });
+  const uploadedJob = { id: "robot-dance", url: UPLOADED.url, createdAt: "2026-10-24T00:00:00+00:00", state: { kind: "downloaded", source: UPLOADED }, progress: null };
+  const location = { hash: "#/new" };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    location.hash = "#/new";
+  });
+  const stub = (reply: typeof FakeXhr.reply) => {
+    FakeXhr.reply = reply;
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    vi.stubGlobal("location", location);
+  };
+
+  test("posts the raw file with its name and the short name, reports progress, and returns the downloaded job", async () => {
+    stub({ status: 201, body: JSON.stringify(uploadedJob) });
+    const progress: number[] = [];
+    const job = await uploadJob(file, "robot-dance", (fraction) => progress.push(fraction));
+    expect([FakeXhr.last?.method, FakeXhr.last?.url, FakeXhr.last?.body]).toEqual(["POST", "/api/uploads?name=Robot+dance.mov&id=robot-dance", file]);
+    expect(progress).toEqual([0.5]);
+    expect(job.state).toEqual({ kind: "downloaded", source: UPLOADED });
+  });
+
+  test("leaves the id out when no short name was typed", async () => {
+    stub({ status: 201, body: JSON.stringify(uploadedJob) });
+    await uploadJob(file, null);
+    expect(FakeXhr.last?.url).toBe("/api/uploads?name=Robot+dance.mov");
+  });
+
+  test("a server refusal is an API error naming the field", async () => {
+    stub({ status: 422, body: JSON.stringify({ error: "This file is not a video ffmpeg can read.", field: "file" }) });
+    const failure = uploadJob(file, null);
+    await expect(failure).rejects.toBeInstanceOf(ApiError);
+    await expect(failure).rejects.toMatchObject({ status: 422, field: "file", message: "This file is not a video ffmpeg can read." });
+  });
+
+  test("a dropped connection means the server is not answering", async () => {
+    stub("network error");
+    await expect(uploadJob(file, null)).rejects.toBeInstanceOf(ServerNotAnswering);
+  });
+
+  test("an expired sign-in sends the author to the login form, which returns to the page", async () => {
+    stub({ status: 401, body: JSON.stringify({ error: "sign in first", field: null }) });
+    await expect(uploadJob(file, null)).rejects.toBeInstanceOf(ApiError);
+    expect(location.hash).toBe("#/login?next=%23%2Fnew");
+  });
+
+  test("any other API call with an expired sign-in also sends the author to the login form", async () => {
+    location.hash = "#/new/robot-dance";
+    stub({ status: 201, body: "" });
+    vi.stubGlobal("fetch", async () => Response.json({ error: "sign in first", field: null }, { status: 401 }));
+    await expect(listJobs()).rejects.toBeInstanceOf(ApiError);
+    expect(location.hash).toBe("#/login?next=%23%2Fnew%2Frobot-dance");
   });
 });

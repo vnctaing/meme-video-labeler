@@ -2,18 +2,22 @@
 Starlette's FileResponse answers Range requests, which the Clip step's <video> needs to seek."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated
 
 import uvicorn
 from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, StringConstraints
 
-from labelmeme import youtube
+from labelmeme import upload, youtube
 from labelmeme.build import build
 from labelmeme.draft import ClipFacts, clip_json, parse_draft, read_clip, read_draft, write_draft
 from labelmeme.edit import UnknownTemplate, open_template, read_draft_if_any, save_in_place, write_draft_of
@@ -21,9 +25,13 @@ from labelmeme.job import (
     DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
     UnknownJob, derive_id, is_running, parse_clip, state_json,
 )
+from labelmeme.seed import seed_templates
 from labelmeme.worker import Paths, Worker
 
 log = logging.getLogger("labelmeme.server")
+
+COOKIE = "labelmeme_author"
+COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
 Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9-]+$", max_length=40)]
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
@@ -32,6 +40,10 @@ Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max
 class CreateJob(BaseModel):
     url: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
     id: Slug | None = None
+
+
+class Login(BaseModel):
+    password: str
 
 
 class ChooseClip(BaseModel):
@@ -60,6 +72,10 @@ class ApiError(Exception):
         self.field = field
 
 
+def author_token(password: str) -> str:
+    return hmac.new(password.encode(), b"labelmeme-author", hashlib.sha256).hexdigest()
+
+
 def _source_of(job: Job) -> SourceFacts:
     state = job.state.resume if isinstance(job.state, Failed) else job.state
     return state.source
@@ -81,14 +97,23 @@ def _parsed_draft(body: dict, clip: ClipFacts) -> dict:
         raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
 
 
-def create_app(paths: Paths, web_port: int) -> FastAPI:
-    allowed_origins = {f"http://localhost:{web_port}", f"http://127.0.0.1:{web_port}"}
+def create_app(paths: Paths, web_port: int, password: str | None = None, site_dir: Path | None = None) -> FastAPI:
+    dev_origins = {f"http://localhost:{web_port}", f"http://127.0.0.1:{web_port}"}
+    token = None if password is None else author_token(password)
     worker = Worker(paths)
     jobs = Jobs(paths.work_dir, paths.templates_dir, worker.enqueue)
+
+    def signed_in(request: Request) -> bool:
+        return token is None or hmac.compare_digest(request.cookies.get(COOKIE, "").encode(), token.encode())
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         paths.work_dir.mkdir(parents=True, exist_ok=True)
+        paths.templates_dir.mkdir(parents=True, exist_ok=True)
+        upload.sweep(paths)
+        if site_dir is not None:
+            for template_id in seed_templates(site_dir / "templates", paths.templates_dir):
+                log.info("seeded template %s", template_id)
         for job in jobs.recover():
             log.info("resuming %s in state %s", job.id, job.state.kind)
         worker.start(jobs)
@@ -97,10 +122,22 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
 
     @app.middleware("http")
-    async def same_origin_only(request: Request, call_next):
+    async def cache_static(request: Request, call_next):
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            immutable = request.url.path.startswith("/assets/")
+            response.headers["cache-control"] = "public, max-age=31536000, immutable" if immutable else "no-cache"
+        return response
+
+    @app.middleware("http")
+    async def same_origin_and_signed_in(request: Request, call_next):
         origin = request.headers.get("origin")
-        if origin is not None and origin not in allowed_origins:
+        host = request.headers.get("host")
+        if origin is not None and origin not in dev_origins | {f"https://{host}", f"http://{host}"}:
             return JSONResponse({"error": f"origin {origin} is not allowed"}, status_code=403)
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/login" and not signed_in(request):
+            return JSONResponse({"error": "sign in first", "field": None}, status_code=401)
         return await call_next(request)
 
     @app.exception_handler(ApiError)
@@ -133,6 +170,18 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
                 "status": progress.status, "done": progress.done, "total": progress.total, "resumed": progress.resumed,
             },
         }
+
+    @app.post("/api/login", status_code=204)
+    def login(body: Login, response: Response) -> None:
+        if token is None:
+            return
+        if not hmac.compare_digest(author_token(body.password).encode(), token.encode()):
+            raise ApiError(401, "wrong password", "password")
+        response.set_cookie(COOKIE, token, max_age=COOKIE_MAX_AGE, path="/", secure=True, httponly=True, samesite="strict")
+
+    @app.get("/api/session")
+    def session() -> dict:
+        return {"maxUploadBytes": upload.MAX_UPLOAD_BYTES}
 
     @app.get("/api/jobs")
     def list_jobs() -> list[dict]:
@@ -230,9 +279,16 @@ def create_app(paths: Paths, web_port: int) -> FastAPI:
     def retry(job_id: str) -> dict:
         return job_out(jobs.transition(job_id, Retry()))
 
+    app.include_router(upload.router(jobs, paths, job_out))
+    if site_dir is not None:
+        app.mount("/templates", StaticFiles(directory=paths.templates_dir, check_dir=False))
+        app.mount("/", StaticFiles(directory=site_dir, html=True))
     return app
 
 
-def serve(paths: Paths, port: int, web_port: int) -> None:
+def serve(
+    paths: Paths, port: int, web_port: int, host: str = "127.0.0.1",
+    password: str | None = None, site_dir: Path | None = None,
+) -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    uvicorn.run(create_app(paths, web_port), host="127.0.0.1", port=port, workers=1)
+    uvicorn.run(create_app(paths, web_port, password, site_dir), host=host, port=port, workers=1)

@@ -1,8 +1,16 @@
 app = "meme-video-labeler"
 primary_region = "iad"
+swap_size_mb = 512
 
 [build]
-  dockerfile = "deploy/Dockerfile"
+  dockerfile = "Dockerfile"
+
+[env]
+  LABELMEME_DATA_DIR = "/data"
+
+[mounts]
+  source = "labelmeme_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8080
@@ -13,4 +21,4 @@ primary_region = "iad"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb"
+  memory = "1gb"

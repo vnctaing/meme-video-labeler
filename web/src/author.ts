@@ -9,6 +9,7 @@ import {
   type SourceFacts,
   chooseClip,
   createJob,
+  defaultCredit,
   getDraft,
   getJob,
   jobSession,
@@ -17,8 +18,11 @@ import {
   retry,
   shortNameToId,
   sourceUrl,
+  uploadJob,
+  uploadProblem,
 } from "./authoring.ts";
 import { type View, el } from "./dom.ts";
+import { type Session, signIn } from "./session.ts";
 import { mountSubjectEditor } from "./subject-editor.ts";
 import type { TemplateId } from "./template.ts";
 
@@ -37,34 +41,128 @@ function stateLabel(state: JobState): string {
   return state.kind === "failed" ? `failed at ${state.step}` : state.kind;
 }
 
-export async function newView(): Promise<View> {
-  const urlInput = el("input", { id: "source-url", type: "url", required: true, placeholder: "https://www.youtube.com/watch?v=…", autocomplete: "off" });
+export function loginView(next: string): View {
+  const password = el("input", { id: "password", type: "password", required: true, autocomplete: "current-password" });
+  const error = el("p", { className: "field-error", id: "password-error", role: "alert" });
+  const submit = el("button", { type: "submit" }, "Sign in");
+  const form = el(
+    "form",
+    { className: "author-form login-form" },
+    el("p", { className: "hint" }, "Only the owner of this site makes and edits templates. Anyone can make memes from the gallery without signing in."),
+    el("div", { className: "field" }, el("label", { htmlFor: password.id }, "Password"), password, error),
+    submit,
+  );
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    error.textContent = "";
+    submit.disabled = true;
+    submit.textContent = "Signing in…";
+    try {
+      await signIn(password.value);
+      location.hash = next;
+      location.reload();
+    } catch (e) {
+      error.textContent = message(e);
+      submit.disabled = false;
+      submit.textContent = "Sign in";
+      password.select();
+    }
+  });
+  requestAnimationFrame(() => password.focus());
+  return { nodes: [header("Sign in"), el("main", { className: "author" }, form)], teardown: () => {} };
+}
+
+const MB = 1024 * 1024;
+
+export async function newView(session: Session): Promise<View> {
   const idInput = el("input", { id: "short-name", type: "text", placeholder: "derived from the video title", maxLength: 80, autocomplete: "off" });
-  const urlError = el("p", { className: "field-error", id: "source-url-error" });
   const idError = el("p", { className: "field-error" });
   const idHint = el("p", { className: "field-hint" });
   idInput.addEventListener("input", () => {
     const id = shortNameToId(idInput.value);
     idHint.textContent = id === "" || id === idInput.value ? "" : `Saved as ${id}`;
   });
-  const submit = el("button", { type: "submit" }, "Fetch video");
-  const form = el(
+  const shortName = () => shortNameToId(idInput.value) || null;
+  const showIdError = (e: unknown) => {
+    if (!(e instanceof ApiError && e.field === "id")) return false;
+    idError.textContent = message(e);
+    return true;
+  };
+
+  const fileInput = el("input", { id: "source-file", type: "file", accept: "video/*", required: true });
+  const fileError = el("p", { className: "field-error", id: "source-file-error", role: "alert" });
+  const uploadProgress = el("progress", { max: 1, value: 0, hidden: true });
+  const uploadStatus = el("p", { className: "field-hint", role: "status" });
+  const uploadButton = el("button", { type: "submit" }, "Upload video");
+  const capMb = Math.round(session.maxUploadBytes / MB);
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files?.[0];
+    const problem = file === undefined ? null : uploadProblem(file.size, session.maxUploadBytes);
+    fileError.textContent = problem ?? "";
+    uploadStatus.textContent = file === undefined || problem !== null ? "" : `${file.name}, ${(file.size / MB).toFixed(1)} MB`;
+  });
+  const uploadForm = el(
     "form",
-    { className: "author-form" },
+    { className: "author-form source-option" },
+    el("h2", {}, "Upload a video file"),
+    el("p", { className: "hint" }, `An MP4, MOV or WebM file from your computer or phone, up to ${capMb} MB.`),
+    el("div", { className: "field" }, el("label", { htmlFor: fileInput.id }, "Video file"), fileInput, fileError),
+    uploadProgress,
+    uploadStatus,
+    uploadButton,
+  );
+  uploadForm.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const file = fileInput.files?.[0];
+    if (file === undefined) return;
+    fileError.textContent = idError.textContent = "";
+    const problem = uploadProblem(file.size, session.maxUploadBytes);
+    if (problem !== null) {
+      fileError.textContent = problem;
+      return;
+    }
+    uploadButton.disabled = true;
+    uploadButton.textContent = "Uploading…";
+    uploadProgress.hidden = false;
+    uploadProgress.removeAttribute("value");
+    const total = (file.size / MB).toFixed(1);
+    uploadStatus.textContent = `Uploading ${total} MB`;
+    try {
+      const job = await uploadJob(file, shortName(), (fraction) => {
+        uploadProgress.value = fraction;
+        uploadStatus.textContent = fraction < 1 ? `Uploading ${Math.round(fraction * 100)}% of ${total} MB` : "Checking the video…";
+      });
+      location.hash = `#/new/${job.id}`;
+    } catch (e) {
+      if (!showIdError(e)) fileError.textContent = message(e);
+      uploadStatus.textContent = "";
+      uploadProgress.hidden = true;
+      uploadButton.disabled = false;
+      uploadButton.textContent = "Upload video";
+    }
+  });
+
+  const urlInput = el("input", { id: "source-url", type: "url", required: true, placeholder: "https://www.youtube.com/watch?v=…", autocomplete: "off" });
+  const urlError = el("p", { className: "field-error", id: "source-url-error", role: "alert" });
+  const submit = el("button", { type: "submit" }, "Fetch video");
+  const urlForm = el(
+    "form",
+    { className: "author-form source-option" },
+    el("h2", {}, "Or use a YouTube link"),
+    el("p", { className: "hint" }, "YouTube sometimes blocks this server. If it does, upload the video file instead."),
     el("div", { className: "field" }, el("label", { htmlFor: urlInput.id }, "YouTube link"), urlInput, urlError),
-    el("div", { className: "field" }, el("label", { htmlFor: idInput.id }, "Short name (optional)"), idInput, idHint, idError),
     submit,
   );
-  form.addEventListener("submit", async (ev) => {
+  urlForm.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     urlError.textContent = idError.textContent = "";
     submit.disabled = true;
     submit.textContent = "Checking the video…";
     try {
-      const job = await createJob(urlInput.value, shortNameToId(idInput.value) || null);
+      const job = await createJob(urlInput.value, shortName());
       location.hash = `#/new/${job.id}`;
     } catch (e) {
-      (e instanceof ApiError && e.field === "id" ? idError : urlError).textContent = message(e);
+      if (!showIdError(e)) urlError.textContent = message(e);
       submit.disabled = false;
       submit.textContent = "Fetch video";
     }
@@ -84,7 +182,16 @@ export async function newView(): Promise<View> {
   }
 
   return {
-    nodes: [header("New template"), el("main", { className: "author" }, form, list)],
+    nodes: [
+      header("New template"),
+      el(
+        "main",
+        { className: "author" },
+        el("div", { className: "source-options" }, uploadForm, urlForm),
+        el("div", { className: "field" }, el("label", { htmlFor: idInput.id }, "Short name (optional)"), idInput, idHint, idError),
+        list,
+      ),
+    ],
     teardown: () => {},
   };
 }
@@ -269,7 +376,7 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
     return { input, field: el("div", { className: "field" }, el("label", { htmlFor: idAttr }, label), input) };
   };
   const titleField = text("clip-title", "Title", current?.title ?? source.title);
-  const creditField = text("clip-credit", "Credit", current?.credit ?? `${source.title}, ${source.channel}, YouTube`);
+  const creditField = text("clip-credit", "Credit", current?.credit ?? defaultCredit(source));
   const licenseField = text("clip-license", "License", current?.license ?? DEFAULT_LICENSE);
   const submit = el("button", { type: "submit" }, current === null ? "Use this clip" : "Use this clip instead");
 
@@ -427,7 +534,7 @@ function failedPanel(job: Job, state: Extract<JobState, { kind: "failed" }>, sho
     el("h2", {}, `The ${state.step} step failed`),
     el("p", { className: "failure", role: "alert" }, state.message),
     button("Retry", () => retry(job.id)),
-    resume.kind === "downloading" ? "" : changeClipLink(job.id, resume.source, resume.clip, show),
+    resume.kind === "downloading" ? el("a", { className: "upload-instead", href: "#/new" }, "Upload the video file instead") : changeClipLink(job.id, resume.source, resume.clip, show),
     error,
   );
 }

@@ -1,3 +1,4 @@
+import { loginHash } from "./route.ts";
 import { type Draft, type SaveBody, type SubjectDraft, importDraft } from "./subjects.ts";
 import { type SubjectId, type TemplateId, TemplateError, array, int, isRecord, loadTemplate, parseBox, record, slug, string } from "./template.ts";
 import { type Cell, type Clip as ClipFacts, HIDDEN, type Rate } from "./track.ts";
@@ -227,6 +228,23 @@ const PROXY_UPSTREAM_DOWN = new Set([502, 503, 504]);
 // Fetch fails a keepalive request once in-flight keepalive bodies sum past 64 KiB; a page-hide write can overlap one autosave.
 const KEEPALIVE_MAX_BYTES = 32 * 1024;
 
+function parseResponse(method: string, url: string, status: number, text: string): unknown {
+  if (PROXY_UPSTREAM_DOWN.has(status)) throw new ServerNotAnswering(`${method} ${url} failed with HTTP ${status}`);
+  if (status === 401 && !location.hash.startsWith("#/login")) location.hash = loginHash(location.hash);
+  let json: unknown = null;
+  try {
+    json = text === "" ? null : JSON.parse(text);
+  } catch {}
+  if (status < 200 || status >= 300) {
+    const o = isRecord(json) ? json : {};
+    const message = typeof o.error === "string" ? o.error : `${method} ${url} failed with HTTP ${status}`;
+    throw new ApiError(status, message, typeof o.field === "string" ? o.field : null);
+  }
+  return json;
+}
+
+const notAnswering = (method: string, url: string, e: unknown) => new ServerNotAnswering(`${method} ${url}: ${e instanceof Error ? e.message : String(e)}`);
+
 async function request(method: string, url: string, body?: unknown, outliveThePage = false): Promise<unknown> {
   const text = body === undefined ? undefined : JSON.stringify(body);
   const res = await fetch(url, {
@@ -235,16 +253,9 @@ async function request(method: string, url: string, body?: unknown, outliveThePa
     body: text,
     keepalive: outliveThePage && text !== undefined && new TextEncoder().encode(text).length <= KEEPALIVE_MAX_BYTES,
   }).catch((e: unknown) => {
-    throw new ServerNotAnswering(`${method} ${url}: ${e instanceof Error ? e.message : String(e)}`);
+    throw notAnswering(method, url, e);
   });
-  if (PROXY_UPSTREAM_DOWN.has(res.status)) throw new ServerNotAnswering(`${method} ${url} failed with HTTP ${res.status}`);
-  const json: unknown = await res.json().catch(() => null);
-  if (!res.ok) {
-    const o = isRecord(json) ? json : {};
-    const message = typeof o.error === "string" ? o.error : `${method} ${url} failed with HTTP ${res.status}`;
-    throw new ApiError(res.status, message, typeof o.field === "string" ? o.field : null);
-  }
-  return json;
+  return parseResponse(method, url, res.status, await res.text().catch(() => ""));
 }
 
 const jobUrl = (id: TemplateId, rest = "") => `/api/jobs/${id}${rest}`;
@@ -260,6 +271,39 @@ export function shortNameToId(name: string): string {
 
 export const createJob = async (url: string, id: string | null): Promise<Job> =>
   parseJob(await request("POST", "/api/jobs", id === null ? { url } : { url, id }));
+// fetch reports no upload progress, so the upload goes through XMLHttpRequest.
+export function uploadJob(file: File, id: string | null, onProgress: (fraction: number) => void = () => {}): Promise<Job> {
+  const query = new URLSearchParams(id === null ? { name: file.name } : { name: file.name, id });
+  const url = `/api/uploads?${query}`;
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && ev.total > 0) onProgress(ev.loaded / ev.total);
+    };
+    xhr.onload = () => {
+      try {
+        resolve(parseJob(parseResponse("POST", url, xhr.status, xhr.responseText)));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    xhr.onerror = () => reject(notAnswering("POST", url, new Error("the connection dropped")));
+    xhr.send(file);
+  });
+}
+
+const MB = 1024 * 1024;
+
+export function uploadProblem(size: number, maxBytes: number): string | null {
+  if (size === 0) return "This file is empty.";
+  if (size <= maxBytes) return null;
+  return `This file is ${(size / MB).toFixed(1)} MB, and the limit is ${Math.round(maxBytes / MB)} MB. Choose a shorter or smaller video.`;
+}
+
+export const defaultCredit = (source: SourceFacts): string =>
+  source.url.startsWith("upload:") ? `${source.title}, ${source.channel}` : `${source.title}, ${source.channel}, YouTube`;
+
 export const getJob = async (id: TemplateId): Promise<Job> => parseJob(await request("GET", jobUrl(id)));
 export const chooseClip = async (id: TemplateId, clip: Clip): Promise<Job> =>
   parseJob(await request("PUT", jobUrl(id, "/clip"), clip));

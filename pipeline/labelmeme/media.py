@@ -20,7 +20,7 @@ class VideoInfo:
 
 
 def _run(args: list[str]) -> str:
-    return subprocess.run(args, start_new_session=True, check=True, capture_output=True, text=True).stdout
+    return subprocess.run(args, check=True, capture_output=True, text=True).stdout
 
 
 def probe(path: Path) -> VideoInfo:

@@ -60,7 +60,7 @@ def make_fixture(templates_dir: Path) -> Path:
                 "-i", f"testsrc2=size={WIDTH}x{HEIGHT}:rate={FPS}:duration={FRAME_COUNT / FPS}",
                 "-c:v", "ffv1", str(src),
             ],
-            check=True, start_new_session=True,
+            check=True,
         )
         info = media.encode(src, video, FPS)
         frames = media.count_frames_cv2(video)

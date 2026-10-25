@@ -21,7 +21,7 @@ def detect_cuts(video: Path, fps: int, threshold: float) -> list[Cut]:
             "ffmpeg", "-v", "error", "-i", str(video), "-an",
             "-vf", f"select='gt(scene,{threshold})',metadata=print:file=-", "-f", "null", "-",
         ],
-        check=True, capture_output=True, text=True,
+        check=True, capture_output=True, text=True, start_new_session=True,
     ).stdout
     pairs = re.findall(r"pts_time:([0-9.]+)\s+lavfi\.scene_score=([0-9.]+)", out)
     frames = [(round(float(t) * fps), float(s)) for t, s in pairs]

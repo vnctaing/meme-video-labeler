@@ -124,3 +124,9 @@ def test_a_signed_in_upload_becomes_a_downloaded_job(tmp_path: Path) -> None:
         res = client.post("/api/uploads?name=Fixture.mp4", content=(FIXTURE / "video.mp4").read_bytes(), headers=SIGNED_IN)
     assert res.status_code == 201, res.text
     assert res.json()["state"]["kind"] == "downloaded"
+
+
+def test_a_non_ascii_cookie_is_refused_not_a_server_error(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        res = client.get("/api/jobs", headers={"cookie": f"{COOKIE}=é".encode("latin-1")})
+    assert res.status_code == 401

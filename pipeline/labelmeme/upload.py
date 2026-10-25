@@ -40,7 +40,7 @@ def _uploads_dir(paths: Paths) -> Path:
 def _probe(path: Path) -> tuple[float, int, int]:
     run = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", str(path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, start_new_session=True,
     )
     if run.returncode != 0:
         raise UploadError(422, NOT_A_VIDEO)

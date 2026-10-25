@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from labelmeme import worker
+from labelmeme.__main__ import TEMPLATES_DIR, WORK_DIR, deployment_from_env
 from labelmeme.job import Clip as JobClip
 from labelmeme.job import ClipChosen, Jobs, SourceFacts, StepDone
 from labelmeme.prep import VideoFacts
@@ -150,3 +151,23 @@ def test_save_with_malformed_runs_is_refused(tmp_path: Path, runs: list) -> None
     assert res.status_code == 422, res.text
     assert res.json()["field"].startswith("$.subjects[0].runs[0]")
     assert not (paths.templates_dir / "job").exists()
+
+
+def test_a_saved_template_is_public_at_once(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("<!doctype html>")
+    with TestClient(create_app(paths, 5184, site_dir=site)) as client:
+        assert client.get("/templates/index.json").json()["templates"] == []
+        assert _save(client, [{"id": "s1", "name": "Thom", "runs": RUNS}]).status_code == 200
+        assert client.get("/templates/job/template.json").json()["subjects"][0]["name"] == "Thom"
+        assert [t["id"] for t in client.get("/templates/index.json").json()["templates"]] == ["job"]
+
+
+def test_the_environment_picks_the_paths_the_site_and_the_password() -> None:
+    assert deployment_from_env({}) == (Paths(WORK_DIR, TEMPLATES_DIR), None, None)
+    blank = {"LABELMEME_DATA_DIR": "/data", "LABELMEME_PASSWORD": "", "LABELMEME_SITE_DIR": ""}
+    assert deployment_from_env(blank) == (Paths(Path("/data/work"), Path("/data/templates")), None, None)
+    prod = {"LABELMEME_DATA_DIR": "/data", "LABELMEME_PASSWORD": "pw", "LABELMEME_SITE_DIR": "/app/site"}
+    assert deployment_from_env(prod) == (Paths(Path("/data/work"), Path("/data/templates")), Path("/app/site"), "pw")

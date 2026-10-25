@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shlex
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from labelmeme.fixture import make_fixture
 from labelmeme.prep import PrepSpec, prep
 from labelmeme.schema import SLUG
+from labelmeme.worker import Paths
 
 PIPELINE_DIR = Path(__file__).resolve().parents[1]
 WORK_DIR = PIPELINE_DIR / "work"
 TEMPLATES_DIR = PIPELINE_DIR.parent / "web" / "public" / "templates"
+
+
+def deployment_from_env(env: Mapping[str, str]) -> tuple[Paths, Path | None, str | None]:
+    data = env.get("LABELMEME_DATA_DIR") or None
+    site = env.get("LABELMEME_SITE_DIR") or None
+    paths = Paths(WORK_DIR, TEMPLATES_DIR) if data is None else Paths(Path(data) / "work", Path(data) / "templates")
+    return paths, None if site is None else Path(site), env.get("LABELMEME_PASSWORD") or None
 
 
 def _slug(value: str) -> str:
@@ -43,7 +53,8 @@ def main() -> None:
     p.add_argument("--license", required=True, help="license of the source, for SOURCE.md")
     p.add_argument("--fps", type=int, default=24)
 
-    s = commands.add_parser("serve", help="run the authoring API that `npm run dev:author` starts")
+    s = commands.add_parser("serve", help="run the authoring API, and the site too when LABELMEME_SITE_DIR is set")
+    s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8787)
     s.add_argument("--web-port", type=int, default=5174, help="the Vite port whose pages may call the API")
 
@@ -60,9 +71,9 @@ def main() -> None:
             print(prep(spec, WORK_DIR / spec.id, command))
         case "serve":
             from labelmeme.server import serve
-            from labelmeme.worker import Paths
 
-            serve(Paths(WORK_DIR, TEMPLATES_DIR), args.port, args.web_port)
+            paths, site_dir, password = deployment_from_env(os.environ)
+            serve(paths, args.port, args.web_port, host=args.host, password=password, site_dir=site_dir)
 
 
 if __name__ == "__main__":

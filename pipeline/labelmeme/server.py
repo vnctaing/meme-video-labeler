@@ -104,7 +104,7 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
     jobs = Jobs(paths.work_dir, paths.templates_dir, worker.enqueue)
 
     def signed_in(request: Request) -> bool:
-        return token is None or hmac.compare_digest(request.cookies.get(COOKIE, ""), token)
+        return token is None or hmac.compare_digest(request.cookies.get(COOKIE, "").encode(), token.encode())
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -174,7 +174,7 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
     def login(body: Login, response: Response) -> None:
         if token is None:
             return
-        if not hmac.compare_digest(author_token(body.password), token):
+        if not hmac.compare_digest(author_token(body.password).encode(), token.encode()):
             raise ApiError(401, "wrong password", "password")
         response.set_cookie(COOKIE, token, max_age=COOKIE_MAX_AGE, path="/", secure=True, httponly=True, samesite="strict")
 

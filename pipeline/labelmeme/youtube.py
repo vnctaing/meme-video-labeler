@@ -20,7 +20,9 @@ KNOWN_ERRORS = (
     ("video is unavailable", "This video is unavailable."),
     ("confirm your age", "This video is age-restricted, so it cannot be downloaded without signing in."),
     ("Requested format is not available", "This video has no H.264 version at 720p or below."),
+    ("not a bot", "YouTube is blocking downloads from this server."),
 )
+UPLOAD_HINT = "You can upload the video file instead."
 
 
 class SourceError(Exception):
@@ -55,10 +57,14 @@ def parse_youtube_url(text: str) -> tuple[str, str]:
 
 
 def plain_error(message: str) -> str:
-    for needle, plain in KNOWN_ERRORS:
-        if needle.lower() in message.lower():
-            return plain
-    return "YouTube said: " + re.sub(r"^ERROR: (\[[^\]]+\] [^:]+: )?", "", message).strip()
+    plain = next((plain for needle, plain in KNOWN_ERRORS if needle.lower() in message.lower()), None)
+    if plain is None:
+        plain = "YouTube said: " + re.sub(r"^ERROR: (\[[^\]]+\] [^:]+: )?", "", message).strip()
+    return _with_hint(plain)
+
+
+def _with_hint(plain: str) -> str:
+    return f"{plain} {UPLOAD_HINT}" if plain.endswith((".", "!", "?")) else f"{plain}. {UPLOAD_HINT}"
 
 
 def _ydl(extra: dict):
@@ -84,7 +90,7 @@ def probe(url: str) -> SourceFacts:
     except DownloadError as e:
         raise SourceError(plain_error(str(e))) from e
     if not info.get("duration"):
-        raise SourceError("This looks like a live stream or a video without a known length.")
+        raise SourceError(_with_hint("This looks like a live stream or a video without a known length."))
     return _facts(info)
 
 
@@ -120,5 +126,5 @@ def download(source: SourceFacts, sources_dir: Path, on_bytes: Callable[[int, in
     except DownloadError as e:
         raise SourceError(plain_error(str(e))) from e
     if not target.is_file():
-        raise SourceError(f"yt-dlp finished without writing {target.name}.")
+        raise SourceError(_with_hint(f"yt-dlp finished without writing {target.name}."))
     return target

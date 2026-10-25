@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { cpSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 
-const run = (cmd, args) => execFileSync(cmd, args, { stdio: "inherit" });
+const run = (cmd, args, cwd) => execFileSync(cmd, args, { stdio: "inherit", cwd });
 const isTracked = (path) => {
   try {
     execFileSync("git", ["ls-files", "--error-unmatch", path], { stdio: "ignore" });
@@ -25,4 +25,4 @@ for (const entry of readdirSync("site/templates", { withFileTypes: true })) {
 }
 console.log(`publishing ${index.templates.map((t) => t.id).join(", ")}`);
 
-run("fly", ["deploy", "--remote-only", "--ha=false"]);
+run("fly", ["deploy", "--remote-only", "--ha=false"], "..");

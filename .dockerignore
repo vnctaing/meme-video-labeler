@@ -1,0 +1,12 @@
+.git
+.audit
+brain
+proof
+docs
+**/__pycache__
+pipeline/models
+pipeline/work
+pipeline/.venv
+pipeline/tests
+web/*
+!web/site

@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from labelmeme.job import (
+    INTERRUPTED,
+    MAX_ATTEMPTS,
     Clip,
     ClipChosen,
     Conflict,
@@ -19,6 +21,7 @@ from labelmeme.job import (
     Saved,
     SourceFacts,
     StepDone,
+    Started,
     StepFailed,
     advance,
     derive_id,
@@ -49,6 +52,7 @@ EVENTS = {
     "clip": ClipChosen(CLIP2),
     "save": Saved(),
     "retry": Retry(),
+    "start": Started(),
 }
 LEGAL = {
     ("downloading", "done"): Downloaded(SOURCE),
@@ -63,6 +67,8 @@ LEGAL = {
     ("failed-download", "retry"): Downloading(SOURCE),
     ("failed-prepare", "retry"): Preparing(SOURCE, CLIP),
     ("failed-prepare", "clip"): Preparing(SOURCE, CLIP2),
+    ("downloading", "start"): Downloading(SOURCE, attempts=1),
+    ("preparing", "start"): Preparing(SOURCE, CLIP, attempts=1),
 }
 PAIRS = [(s, e) for s in STATES for e in EVENTS]
 
@@ -215,3 +221,93 @@ def test_unknown_job_is_a_key_error(tmp_path: Path) -> None:
     jobs, _ = _store(tmp_path)
     with pytest.raises(KeyError):
         jobs.get("nope")
+
+
+@pytest.mark.parametrize("running", [Downloading(SOURCE), Preparing(SOURCE, CLIP)], ids=["download", "prepare"])
+def test_started_counts_until_the_budget_then_fails_with_a_full_retry(running: Downloading | Preparing) -> None:
+    state = running
+    for n in range(1, MAX_ATTEMPTS + 1):
+        state = advance(state, Started())
+        assert state == type(running)(**{**_fields(running), "attempts": n})
+    failed = advance(state, Started())
+    step = "download" if isinstance(running, Downloading) else "prepare"
+    assert failed == Failed(step, INTERRUPTED.format(n=MAX_ATTEMPTS), running)
+    assert advance(failed, Retry()) == running
+    assert advance(failed, Retry()).attempts == 0
+
+
+def _fields(state: Downloading | Preparing) -> dict:
+    return {name: getattr(state, name) for name in state.__slots__}
+
+
+def test_a_step_failure_resumes_with_a_full_budget() -> None:
+    assert advance(Preparing(SOURCE, CLIP, attempts=2), StepFailed("boom")) == Failed("prepare", "boom", Preparing(SOURCE, CLIP))
+    assert advance(Downloading(SOURCE, attempts=3), StepFailed("boom")) == Failed("download", "boom", Downloading(SOURCE))
+
+
+def test_a_new_clip_starts_with_a_full_budget() -> None:
+    failed = Failed("prepare", "boom", Preparing(SOURCE, CLIP))
+    assert advance(failed, ClipChosen(CLIP2)).attempts == 0
+
+
+def test_attempts_are_written_on_running_states_only() -> None:
+    raw = json.loads(dump_job(Job("a", SOURCE.url, "t", Preparing(SOURCE, CLIP, attempts=2))))
+    assert raw["state"]["attempts"] == 2
+    assert raw["version"] == 1
+    assert "attempts" not in json.loads(dump_job(Job("a", SOURCE.url, "t", Editing(SOURCE, CLIP))))["state"]
+    failed = json.loads(dump_job(Job("a", SOURCE.url, "t", Failed("prepare", "boom", Preparing(SOURCE, CLIP)))))
+    assert failed["state"]["resume"]["attempts"] == 0
+    assert parse_job(json.loads(dump_job(Job("a", SOURCE.url, "t", Downloading(SOURCE, attempts=3))))).state.attempts == 3
+
+
+@pytest.mark.parametrize("state", ["downloading", "preparing"])
+def test_a_job_json_without_attempts_parses_as_zero(state: str) -> None:
+    raw = json.loads(dump_job(Job("a", SOURCE.url, "t", STATES[state])))
+    del raw["state"]["attempts"]
+    assert parse_job(raw).state.attempts == 0
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, True, "2"])
+def test_a_bad_attempts_count_names_its_path(bad: object) -> None:
+    raw = json.loads(dump_job(Job("a", SOURCE.url, "t", STATES["preparing"])))
+    raw["state"]["attempts"] = bad
+    with pytest.raises(ValueError, match=r"\$\.state\.attempts"):
+        parse_job(raw)
+
+
+def test_start_step_counts_without_enqueueing(tmp_path: Path) -> None:
+    jobs, enqueued = _store(tmp_path)
+    jobs.create("a", SOURCE)
+    enqueued.clear()
+    job = jobs.start_step("a")
+    assert job is not None and job.state == Downloading(SOURCE, attempts=1)
+    assert jobs.get("a").state == Downloading(SOURCE, attempts=1)
+    assert enqueued == []
+
+
+def test_start_step_skips_a_job_that_is_not_running(tmp_path: Path) -> None:
+    jobs, enqueued = _store(tmp_path)
+    jobs.create_downloaded("a", SOURCE)
+    assert jobs.start_step("a") is None
+    assert jobs.get("a").state == Downloaded(SOURCE)
+
+
+def test_start_step_past_the_budget_fails_the_job(tmp_path: Path) -> None:
+    jobs, enqueued = _store(tmp_path)
+    jobs.create("a", SOURCE)
+    for _ in range(MAX_ATTEMPTS):
+        assert jobs.start_step("a") is not None
+    enqueued.clear()
+    assert jobs.start_step("a") is None
+    assert jobs.get("a").state == Failed("download", INTERRUPTED.format(n=MAX_ATTEMPTS), Downloading(SOURCE))
+    assert enqueued == []
+
+
+def test_create_downloaded_persists_without_enqueueing(tmp_path: Path) -> None:
+    jobs, enqueued = _store(tmp_path)
+    job = jobs.create_downloaded("up", SOURCE)
+    assert job.state == Downloaded(SOURCE)
+    assert jobs.get("up") == job
+    assert enqueued == []
+    with pytest.raises(Conflict, match="up"):
+        jobs.create_downloaded("up", SOURCE)

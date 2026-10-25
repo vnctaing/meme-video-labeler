@@ -7,7 +7,7 @@ import threading
 import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -21,6 +21,8 @@ MAX_CLIP_SECONDS = 30.0
 MIN_CLIP_SECONDS = 1.0
 DEFAULT_LICENSE = "unknown, personal use"
 MAX_ID_LENGTH = 40
+MAX_ATTEMPTS = 3
+INTERRUPTED = "The machine stopped {n} times during this step, maybe out of memory. Retry, or choose a shorter clip."
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,7 @@ def parse_clip(*, start: float, end: float, title: str, credit: str, license: st
 @dataclass(frozen=True, slots=True)
 class Downloading:
     source: SourceFacts
+    attempts: int = 0
     kind: Literal["downloading"] = "downloading"
 
 
@@ -72,6 +75,7 @@ class Downloaded:
 class Preparing:
     source: SourceFacts
     clip: Clip
+    attempts: int = 0
     kind: Literal["preparing"] = "preparing"
 
 
@@ -140,9 +144,16 @@ class Retry:
     pass
 
 
-Event = StepDone | StepFailed | ClipChosen | Saved | Retry
+@dataclass(frozen=True, slots=True)
+class Started:
+    pass
 
-EVENT_NAMES: dict[type, str] = {StepDone: "done", StepFailed: "fail", ClipChosen: "clip", Saved: "save", Retry: "retry"}
+
+Event = StepDone | StepFailed | ClipChosen | Saved | Retry | Started
+
+EVENT_NAMES: dict[type, str] = {
+    StepDone: "done", StepFailed: "fail", ClipChosen: "clip", Saved: "save", Retry: "retry", Started: "start",
+}
 
 
 class Conflict(Exception):
@@ -159,10 +170,12 @@ def advance(state: State, event: Event) -> State:
             return Downloaded(s)
         case Preparing(source=s, clip=c), StepDone():
             return Editing(s, c)
-        case Downloading(), StepFailed(message=m):
-            return Failed("download", m, state)
-        case Preparing(), StepFailed(message=m):
-            return Failed("prepare", m, state)
+        case Downloading() | Preparing(), StepFailed(message=m):
+            return Failed(_step(state), m, replace(state, attempts=0))
+        case Downloading(attempts=n) | Preparing(attempts=n), Started() if n < MAX_ATTEMPTS:
+            return replace(state, attempts=n + 1)
+        case Downloading() | Preparing(), Started():
+            return Failed(_step(state), INTERRUPTED.format(n=MAX_ATTEMPTS), replace(state, attempts=0))
         case Downloaded(source=s) | Editing(source=s) | Ready(source=s) | Failed(resume=Preparing(source=s)), ClipChosen(clip=c):
             return Preparing(s, c)
         case Editing(source=s, clip=c) | Ready(source=s, clip=c), Saved():
@@ -170,6 +183,10 @@ def advance(state: State, event: Event) -> State:
         case Failed(resume=r), Retry():
             return r
     raise Conflict(f"cannot {EVENT_NAMES[type(event)]} while the job is {_describe(state)}")
+
+
+def _step(state: Running) -> Step:
+    return "download" if isinstance(state, Downloading) else "prepare"
 
 
 def _describe(state: State) -> str:
@@ -187,9 +204,13 @@ def _clip_json(c: Clip) -> dict:
 
 def state_json(state: State) -> dict:
     match state:
-        case Downloading(source=s) | Downloaded(source=s):
+        case Downloading(source=s, attempts=n):
+            return {"kind": state.kind, "source": _source_json(s), "attempts": n}
+        case Downloaded(source=s):
             return {"kind": state.kind, "source": _source_json(s)}
-        case Preparing(source=s, clip=c) | Editing(source=s, clip=c) | Ready(source=s, clip=c):
+        case Preparing(source=s, clip=c, attempts=n):
+            return {"kind": state.kind, "source": _source_json(s), "clip": _clip_json(c), "attempts": n}
+        case Editing(source=s, clip=c) | Ready(source=s, clip=c):
             return {"kind": state.kind, "source": _source_json(s), "clip": _clip_json(c)}
         case Failed(step=step, message=m, resume=r):
             return {"kind": "failed", "step": step, "message": m, "resume": state_json(r)}
@@ -243,6 +264,15 @@ def _parse_clip(v: object, path: str) -> Clip:
     )
 
 
+def _attempts(v: object, path: str) -> int:
+    if v is None:
+        return 0
+    n = _int(v, path)
+    if n < 0:
+        raise ValueError(f"{path}: expected a count of zero or more, got {n}")
+    return n
+
+
 def _kind(o: dict, path: str, allowed: tuple[str, ...]) -> str:
     kind = o.get("kind")
     if kind not in allowed:
@@ -266,13 +296,13 @@ def _parse_state(v: object, path: str, allowed: tuple[str, ...] = KINDS) -> Stat
     source = _parse_source(o.get("source"), f"{path}.source")
     match kind:
         case "downloading":
-            return Downloading(source)
+            return Downloading(source, _attempts(o.get("attempts"), f"{path}.attempts"))
         case "downloaded":
             return Downloaded(source)
     clip = _parse_clip(o.get("clip"), f"{path}.clip")
     match kind:
         case "preparing":
-            return Preparing(source, clip)
+            return Preparing(source, clip, _attempts(o.get("attempts"), f"{path}.attempts"))
         case "editing":
             return Editing(source, clip)
         case _:
@@ -333,15 +363,22 @@ class Jobs:
         dirs = [*self._work_dir.glob("*"), *self._templates_dir.glob("*")]
         return {d.name for d in dirs if d.is_dir()}
 
-    def create(self, job_id: str, source: SourceFacts) -> Job:
+    def _create(self, job_id: str, state: Downloading | Downloaded) -> Job:
         with self._lock:
             if job_id in self.taken():
                 raise Conflict(f"the name {job_id!r} is already used by a template or a work directory")
-            job = Job(job_id, source.url, datetime.now(UTC).isoformat(timespec="microseconds"), Downloading(source))
+            job = Job(job_id, state.source.url, datetime.now(UTC).isoformat(timespec="microseconds"), state)
             self._path(job_id).parent.mkdir(parents=True)
             write_atomic(self._path(job_id), dump_job(job))
+        return job
+
+    def create(self, job_id: str, source: SourceFacts) -> Job:
+        job = self._create(job_id, Downloading(source))
         self._enqueue(job, False)
         return job
+
+    def create_downloaded(self, job_id: str, source: SourceFacts) -> Job:
+        return self._create(job_id, Downloaded(source))
 
     def get(self, job_id: str) -> Job:
         return self._load(job_id)
@@ -363,6 +400,15 @@ class Jobs:
         if is_running(job.state):
             self._enqueue(job, False)
         return job
+
+    def start_step(self, job_id: str) -> Job | None:
+        with self._lock:
+            current = self._load(job_id)
+            if not is_running(current.state):
+                return None
+            job = Job(current.id, current.url, current.created_at, advance(current.state, Started()))
+            write_atomic(self._path(job_id), dump_job(job))
+        return job if is_running(job.state) else None
 
     @contextmanager
     def with_settled(self, job_id: str, kinds: tuple[str, ...]) -> Iterator[Job]:

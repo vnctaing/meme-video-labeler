@@ -132,7 +132,8 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
     @app.middleware("http")
     async def same_origin_and_signed_in(request: Request, call_next):
         origin = request.headers.get("origin")
-        if origin is not None and origin not in dev_origins | {f"https://{request.headers.get('host')}"}:
+        host = request.headers.get("host")
+        if origin is not None and origin not in dev_origins | {f"https://{host}", f"http://{host}"}:
             return JSONResponse({"error": f"origin {origin} is not allowed"}, status_code=403)
         path = request.url.path
         if path.startswith("/api/") and path != "/api/login" and not signed_in(request):

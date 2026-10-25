@@ -92,6 +92,13 @@ def test_the_origin_check_runs_before_the_password(tmp_path: Path) -> None:
     assert statuses == (204, 403, 403, 403, 204)
 
 
+def test_the_site_loads_its_own_scripts_over_plain_http(tmp_path: Path) -> None:
+    with TestClient(_app(tmp_path)) as client:
+        same_host = client.post("/api/login", json={"password": "pw"}, headers={"origin": "http://testserver"})
+        other_port = client.post("/api/login", json={"password": "pw"}, headers={"origin": "http://testserver:9999"})
+    assert (same_host.status_code, other_port.status_code) == (204, 403)
+
+
 def test_without_a_password_nothing_needs_the_cookie(tmp_path: Path) -> None:
     with TestClient(_app(tmp_path, password=None)) as client:
         assert client.get("/api/jobs").json() == []

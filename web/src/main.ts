@@ -3,16 +3,9 @@ import { type View, el } from "./dom.ts";
 import type { ExportSupport } from "./export.ts";
 import { loadLabelFont } from "./labels.ts";
 import { mountPreview } from "./preview.ts";
-import { type IndexEntry, type SubjectId, type TemplateId, loadIndex, loadTemplate } from "./template.ts";
-
-type Route =
-  | { kind: "gallery" }
-  | { kind: "editor"; id: string }
-  | { kind: "new" }
-  | { kind: "job"; id: TemplateId }
-  | { kind: "edit"; id: TemplateId };
-
-const AUTHORING = import.meta.env.VITE_AUTHOR === "1";
+import { type Route, parseRoute } from "./route.ts";
+import { type Session, loadSession } from "./session.ts";
+import { type IndexEntry, type SubjectId, loadIndex, loadTemplate } from "./template.ts";
 
 type ExportState =
   | { kind: "idle" }
@@ -24,29 +17,21 @@ type SupportState = { kind: "checking" } | ({ kind: "checked" } & ExportSupport)
 
 const BASE_URL = new URL(import.meta.env.BASE_URL, location.href).href;
 
-function parseRoute(hash: string): Route {
-  const m = /^#\/t\/([a-z0-9-]+)$/.exec(hash);
-  if (m !== null) return { kind: "editor", id: m[1] };
-  if (!AUTHORING) return { kind: "gallery" };
-  if (hash === "#/new") return { kind: "new" };
-  const edit = /^#\/edit\/([a-z0-9-]+)$/.exec(hash);
-  if (edit !== null) return { kind: "edit", id: edit[1] as TemplateId };
-  const job = /^#\/new\/([a-z0-9-]+)$/.exec(hash);
-  return job === null ? { kind: "gallery" } : { kind: "job", id: job[1] as TemplateId };
-}
-
-async function routeView(route: Route): Promise<View> {
+async function routeView(route: Route, session: Session | null): Promise<View> {
+  const author = session !== null;
   switch (route.kind) {
     case "gallery":
-      return galleryView();
+      return galleryView(author);
     case "editor":
       return editorView(route.id);
+    case "login":
+      return (await import("./author.ts")).loginView(route.next);
     case "new":
-      return AUTHORING ? (await import("./author.ts")).newView() : galleryView();
+      return session === null ? galleryView(false) : (await import("./author.ts")).newView(session);
     case "job":
-      return AUTHORING ? (await import("./author.ts")).jobView(route.id) : galleryView();
+      return author ? (await import("./author.ts")).jobView(route.id) : galleryView(false);
     case "edit":
-      return AUTHORING ? (await import("./author.ts")).editTemplateView(route.id) : galleryView();
+      return author ? (await import("./author.ts")).editTemplateView(route.id) : galleryView(false);
     default: {
       const _exhaustive: never = route;
       return _exhaustive;
@@ -62,7 +47,7 @@ function subjectCount(n: number): string {
   return `${n} ${n === 1 ? "subject" : "subjects"}`;
 }
 
-function galleryCard(t: IndexEntry): HTMLElement {
+function galleryCard(t: IndexEntry, author: boolean): HTMLElement {
   return el(
     "article",
     { className: "card" },
@@ -74,11 +59,11 @@ function galleryCard(t: IndexEntry): HTMLElement {
       el("p", { className: "credit" }, t.credit),
       el("p", { className: "meta" }, `${formatDuration(t.frameCount, t.fps)} · ${subjectCount(t.subjectCount)}`),
     ),
-    ...(AUTHORING ? [el("a", { className: "card-edit", href: `#/edit/${t.id}`, title: `Edit ${t.title}` }, "Edit")] : []),
+    ...(author ? [el("a", { className: "card-edit", href: `#/edit/${t.id}`, title: `Edit ${t.title}` }, "Edit")] : []),
   );
 }
 
-async function galleryView(): Promise<View> {
+async function galleryView(author: boolean): Promise<View> {
   const templates = await loadIndex(BASE_URL);
   return {
     nodes: [
@@ -86,8 +71,8 @@ async function galleryView(): Promise<View> {
       el(
         "main",
         { className: "gallery" },
-        ...(AUTHORING ? [el("a", { className: "card new-card", href: "#/new" }, el("h2", {}, "+ New template"), el("p", { className: "meta" }, "From a YouTube link"))] : []),
-        ...templates.map(galleryCard),
+        ...(author ? [el("a", { className: "card new-card", href: "#/new" }, el("h2", {}, "+ New template"), el("p", { className: "meta" }, "From a video file or a YouTube link"))] : []),
+        ...templates.map((t) => galleryCard(t, author)),
       ),
     ],
     teardown: () => {},
@@ -209,14 +194,14 @@ function statusText(state: ExportState, support: SupportState): string {
 }
 
 async function start(root: HTMLElement) {
+  const session = await loadSession();
   let teardown: () => void = () => {};
   let latest = 0;
   const render = async () => {
     const token = ++latest;
     teardown();
     teardown = () => {};
-    const route = parseRoute(location.hash);
-    const view = await routeView(route).catch(errorView);
+    const view = await routeView(parseRoute(location.hash, session !== null), session).catch(errorView);
     if (token !== latest) {
       view.teardown();
       return;

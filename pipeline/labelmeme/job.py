@@ -7,7 +7,7 @@ import shutil
 import threading
 import unicodedata
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -356,6 +356,10 @@ class Jobs:
         self._lock = threading.RLock()
         self._enqueue = enqueue
 
+    @property
+    def lock(self) -> AbstractContextManager:
+        return self._lock
+
     def _path(self, job_id: str) -> Path:
         return self._work_dir / job_id / "job.json"
 
@@ -456,9 +460,16 @@ class Jobs:
             if not sources_dir.is_dir():
                 return
             for entry in sources_dir.iterdir():
-                if entry.is_dir() and entry.name not in needed and (video_ids is None or entry.name in video_ids):
-                    log.info("deleting the source video %s", entry.name)
-                    shutil.rmtree(entry)
+                if entry.name in needed or (video_ids is not None and entry.name not in video_ids):
+                    continue
+                log.info("deleting the source video %s", entry.name)
+                try:
+                    if entry.is_symlink() or entry.is_file():
+                        entry.unlink()
+                    else:
+                        shutil.rmtree(entry)
+                except OSError as e:
+                    log.warning("could not delete the source video %s: %s", entry.name, e)
 
     def recover(self) -> list[Job]:
         pending = sorted((j for j in self.list() if is_running(j.state)), key=lambda j: j.created_at)

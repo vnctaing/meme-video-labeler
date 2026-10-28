@@ -389,3 +389,30 @@ def test_releasing_one_source_leaves_other_unreferenced_sources_alone(tmp_path: 
     jobs.discard_unneeded_sources(tmp_path / "work/.sources", {SOURCE.video_id})
     assert not mine.exists()
     assert just_uploaded.is_dir()
+
+
+def test_a_symlink_in_the_sources_is_removed_without_following_it(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    (tmp_path / "work/.sources").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "work/.sources/link").symlink_to(outside, target_is_directory=True)
+    orphan = _with_source(tmp_path, "orphan")
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources")
+    assert (outside / "keep.txt").read_text() == "keep"
+    assert not orphan.exists()
+
+
+def test_an_unreadable_source_does_not_stop_the_sweep_or_the_others(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    stuck = _with_source(tmp_path, "a-stuck")
+    (stuck / "sub").mkdir()
+    (stuck / "sub/x").write_text("x")
+    (stuck / "sub").chmod(0)
+    other = _with_source(tmp_path, "z-other")
+    try:
+        jobs.discard_unneeded_sources(tmp_path / "work/.sources")
+        assert not other.exists()
+    finally:
+        (stuck / "sub").chmod(0o700)

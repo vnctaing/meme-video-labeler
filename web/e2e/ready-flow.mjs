@@ -102,12 +102,12 @@ try {
   const error = await page.locator(".subject-editor .field-error").textContent();
   assert(error === `no template named '${GONE}'`, `the error names the missing template: ${error}`);
   await page.screenshot({ path: path.join(OUT, "02-ready-template-gone.png") });
-  const change = page.locator(".subject-editor summary", { hasText: "Change the clip" });
-  assert((await change.count()) === 1, "a ready job whose template is gone still offers \"Change the clip\"");
-  await change.click();
-  await page.locator(".clip-panel h2", { hasText: "Change the clip" }).waitFor();
-  log('PASS "Change the clip" opens the clip form');
-  await page.screenshot({ path: path.join(OUT, "03-change-the-clip.png") });
+  assert((await page.locator(".subject-editor summary", { hasText: "Change the clip" }).count()) === 0, "a ready job offers no \"Change the clip\"");
+  const back = page.locator(".subject-editor a", { hasText: "Back to all clips" });
+  assert((await back.count()) === 1, "a ready job whose template is gone offers a way back to the gallery");
+  await back.click();
+  await page.waitForFunction(() => location.hash === "#/");
+  log("PASS the back link leaves for the gallery");
 } catch (e) {
   await page.screenshot({ path: path.join(OUT, "failed.png") });
   throw e;

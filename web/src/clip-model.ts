@@ -129,6 +129,11 @@ export function revealInView(v: View, t: number, duration: number): View {
   return v;
 }
 
+export function revealRange(v: View, r: Range, duration: number): View {
+  if (r.end - r.start > v.to - v.from) return fitView(r, duration);
+  return revealInView(revealInView(v, r.start, duration), r.end, duration);
+}
+
 export const isZoomed = (v: View, duration: number) => v.to - v.from < duration - 0.01;
 export const canZoomIn = (v: View, duration: number) => v.to - v.from > Math.min(MIN_VIEW_SECONDS, duration) + 1e-6;
 

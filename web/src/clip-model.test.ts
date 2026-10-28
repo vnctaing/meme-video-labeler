@@ -13,6 +13,7 @@ import {
   panView,
   parseTime,
   revealInView,
+  revealRange,
   setIn,
   setOut,
   setView,
@@ -207,6 +208,13 @@ describe("view", () => {
     expect(revealInView({ from: 100, to: 130 }, 140, D)).toEqual({ from: 110, to: 140 });
     expect(revealInView({ from: 100, to: 130 }, 95, D)).toEqual({ from: 95, to: 125 });
     expect(revealInView({ from: 100, to: 130 }, 110, D)).toEqual({ from: 100, to: 130 });
+  });
+  test("revealing a range pans just enough to show all of it, or re-fits when it is wider than the view", () => {
+    expect(revealRange({ from: 100, to: 130 }, { start: 200, end: 210 }, D)).toEqual({ from: 180, to: 210 });
+    expect(revealRange({ from: 100, to: 130 }, { start: 50, end: 60 }, D)).toEqual({ from: 50, to: 80 });
+    expect(revealRange({ from: 100, to: 130 }, { start: 110, end: 120 }, D)).toEqual({ from: 100, to: 130 });
+    expect(revealRange({ from: 100, to: 130 }, { start: 120, end: 140 }, D)).toEqual({ from: 110, to: 140 });
+    expect(revealRange({ from: 100, to: 112 }, { start: 300, end: 320 }, D)).toEqual(fitView({ start: 300, end: 320 }, D));
   });
   test("panning stops at the source edges", () => {
     expect(panView({ from: 10, to: 40 }, -50, D)).toEqual({ from: 0, to: 30 });

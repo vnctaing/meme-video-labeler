@@ -178,6 +178,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .trim-handle::after { content: ""; width: 2px; height: 20px; background: #111; border-radius: 1px; }
 .trim-handle.start { left: 0; margin-left: -30px; border-radius: 8px 0 0 8px; }
 .trim-handle.end { left: 100%; margin-left: -14px; border-radius: 0 8px 8px 0; }
+.trim-sel.narrow .trim-handle.start { margin-left: -44px; padding: 0 0 0 28px; }
+.trim-sel.narrow .trim-handle.end { margin-left: 0; padding: 0 28px 0 0; }
 .trim-handle.hit::after { background: var(--danger); }
 .trimmer :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .trim-head { position: absolute; top: -8px; bottom: -8px; width: 2px; margin-left: -1px; background: #fff; pointer-events: none; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); }

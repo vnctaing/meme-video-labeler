@@ -16,7 +16,7 @@ import {
   moveWindow,
   panView,
   parseTime,
-  revealInView,
+  revealRange,
   setIn,
   setOut,
   setView,
@@ -30,6 +30,7 @@ const TRACK_PAD = 16;
 const NOTE_MS = 2500;
 const LOOP_GUARD_SECONDS = 0.03;
 const EDGE_PX = 24;
+const NARROW_SELECTION_PX = 100;
 const AUTOSCROLL_FRACTION = 0.02;
 const FINE_DRAG = 0.1;
 const RULER_STEPS = [0.1, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300];
@@ -199,6 +200,7 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     const xs = xOf(range.start);
     const xe = xOf(range.end);
     place(selection, xs, xe - xs);
+    selection.classList.toggle("narrow", xe - xs < NARROW_SELECTION_PX);
     place(dimLeft, 0, clamp(xs, 0, width));
     place(dimRight, clamp(xe, 0, width), width - clamp(xe, 0, width));
     for (const [handle, t] of [[startHandle, range.start], [endHandle, range.end]] as const) {
@@ -281,8 +283,11 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     range = next;
     options.onChange(range);
   };
-  const reveal = (t: number) => {
-    view = revealInView(view, t, duration);
+  const revealClip = () => {
+    view = revealRange(view, range, duration);
+  };
+  const revealHead = () => {
+    if (head < view.from || head > view.to) view = panView(view, head < view.from ? head - view.from : head - view.to, duration);
   };
 
   function applyDrag(d: Drag, clientX: number) {
@@ -351,7 +356,7 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
 
   function dragStop() {
     if (drag !== null && drag.kind !== "scrub") {
-      reveal(drag.kind === "end" ? range.end : range.start);
+      revealClip();
       render();
     }
     drag = null;
@@ -431,7 +436,7 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
         const pull = handle === "start" ? setIn(range, t, duration) : setOut(range, t, duration);
         commit(pull.range);
         if (pull.pulled !== null) say(`${pull.pulled === "end" ? "End" : "Start"} moved to keep the clip at ${trim(limit)} s`);
-        reveal(current());
+        revealClip();
         seek(current());
       }
       input.classList.remove("bad");
@@ -454,18 +459,18 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     if (kind === "start") {
       commit(dragStart(range, range.start + dt, duration));
       seek(range.start);
-      reveal(range.start);
+      revealClip();
     } else if (kind === "end") {
       commit(dragEnd(range, range.end + dt, duration));
       seek(range.end);
-      reveal(range.end);
+      revealClip();
     } else if (kind === "move") {
       commit(moveWindow(range, range.start + dt, duration));
       seek(range.start);
-      reveal(range.start);
+      revealClip();
     } else {
       seek(head + dt);
-      reveal(head);
+      revealHead();
     }
     render();
   }
@@ -474,7 +479,7 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     const pull = handle === "start" ? setIn(range, head, duration) : setOut(range, head, duration);
     commit(pull.range);
     if (pull.pulled !== null) say(`${pull.pulled === "end" ? "End" : "Start"} moved to keep the clip at ${trim(limit)} s`);
-    reveal(handle === "start" ? range.start : range.end);
+    revealClip();
     render();
   }
 
@@ -490,7 +495,10 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     }
     switch (ev.key.toLowerCase()) {
       case " ":
-        if (interactive) return false;
+        if (interactive) {
+          ev.stopPropagation();
+          return false;
+        }
         togglePlay();
         return true;
       case "i":
@@ -533,7 +541,7 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     if (node.isConnected) wasConnected = true;
     else if (wasConnected) {
       document.removeEventListener("keydown", documentKey);
-      removeEventListener("resize", onResize);
+      resizeObserver.disconnect();
       clearTimeout(noteTimer);
       video.pause();
       return;
@@ -557,8 +565,8 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
     }
     requestAnimationFrame(frame);
   }
-  const onResize = () => render();
-  addEventListener("resize", onResize);
+  const resizeObserver = new ResizeObserver(() => render());
+  resizeObserver.observe(track);
 
   seek(range.start);
   render();

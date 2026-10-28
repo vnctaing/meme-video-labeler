@@ -62,7 +62,6 @@ LEGAL = {
     ("preparing", "fail"): Failed("prepare", "boom", Preparing(SOURCE, CLIP)),
     ("editing", "clip"): Preparing(SOURCE, CLIP2),
     ("editing", "save"): Ready(SOURCE, CLIP),
-    ("ready", "clip"): Preparing(SOURCE, CLIP2),
     ("ready", "save"): Ready(SOURCE, CLIP),
     ("failed-download", "retry"): Downloading(SOURCE),
     ("failed-prepare", "retry"): Preparing(SOURCE, CLIP),
@@ -311,3 +310,82 @@ def test_create_downloaded_persists_without_enqueueing(tmp_path: Path) -> None:
     assert enqueued == []
     with pytest.raises(Conflict, match="up"):
         jobs.create_downloaded("up", SOURCE)
+
+
+def _with_source(tmp_path: Path, video_id: str = SOURCE.video_id) -> Path:
+    source = tmp_path / "work/.sources" / video_id
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "source.mp4").write_bytes(b"video")
+    return source
+
+
+def _saved(jobs: Jobs, job_id: str, source: SourceFacts = SOURCE) -> None:
+    jobs.create(job_id, source)
+    for event in (StepDone(), ClipChosen(CLIP), StepDone(), Saved()):
+        jobs.transition(job_id, event)
+
+
+def test_a_saved_job_releases_its_source(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    source = _with_source(tmp_path)
+    _saved(jobs, "a")
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources", {SOURCE.video_id})
+    assert not source.exists()
+
+
+def test_a_source_shared_with_an_unsaved_job_is_kept(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    source = _with_source(tmp_path)
+    _saved(jobs, "a")
+    jobs.create("b", SOURCE)
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources", {SOURCE.video_id})
+    assert (source / "source.mp4").read_bytes() == b"video"
+
+
+@pytest.mark.parametrize("resume", [Downloading(SOURCE), Preparing(SOURCE, CLIP)])
+def test_a_failed_job_that_can_retry_keeps_its_source(tmp_path: Path, resume: Downloading | Preparing) -> None:
+    jobs, _ = _store(tmp_path)
+    source = _with_source(tmp_path)
+    jobs.create("a", SOURCE)
+    if isinstance(resume, Preparing):
+        for event in (StepDone(), ClipChosen(CLIP)):
+            jobs.transition("a", event)
+    jobs.transition("a", StepFailed("boom"))
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources")
+    assert (source / "source.mp4").is_file()
+
+
+def test_the_boot_sweep_removes_orphans_and_keeps_needed_sources(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    needed = _with_source(tmp_path, "needed")
+    orphan = _with_source(tmp_path, "orphan")
+    saved = _with_source(tmp_path, "saved")
+    jobs.create("editing", SourceFacts("needed", "u", "t", "c", 10.0, 1, 1))
+    _saved(jobs, "done", SourceFacts("saved", "u", "t", "c", 10.0, 1, 1))
+    templates = tmp_path / "templates/done"
+    templates.mkdir(parents=True)
+    (templates / "video.mp4").write_bytes(b"template")
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources")
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources")
+    assert needed.is_dir()
+    assert not orphan.exists() and not saved.exists()
+    assert (templates / "video.mp4").read_bytes() == b"template"
+
+
+def test_nothing_is_deleted_while_a_job_file_cannot_be_read(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    orphan = _with_source(tmp_path, "orphan")
+    (tmp_path / "work/broken").mkdir()
+    (tmp_path / "work/broken/job.json").write_text("{")
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources")
+    assert orphan.is_dir()
+
+
+def test_releasing_one_source_leaves_other_unreferenced_sources_alone(tmp_path: Path) -> None:
+    jobs, _ = _store(tmp_path)
+    mine = _with_source(tmp_path)
+    just_uploaded = _with_source(tmp_path, "upload-new")
+    _saved(jobs, "a")
+    jobs.discard_unneeded_sources(tmp_path / "work/.sources", {SOURCE.video_id})
+    assert not mine.exists()
+    assert just_uploaded.is_dir()

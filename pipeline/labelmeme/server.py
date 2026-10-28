@@ -22,8 +22,8 @@ from labelmeme.build import build
 from labelmeme.draft import ClipFacts, clip_json, parse_draft, read_clip, read_draft, write_draft
 from labelmeme.edit import UnknownTemplate, open_template, read_draft_if_any, save_in_place, write_draft_of
 from labelmeme.job import (
-    DEFAULT_LICENSE, ClipChosen, Conflict, Failed, Job, Jobs, Retry, Saved, SourceFacts,
-    UnknownJob, derive_id, is_running, parse_clip, state_json,
+    DEFAULT_LICENSE, ClipChosen, Conflict, Job, Jobs, Retry, Saved,
+    UnknownJob, derive_id, is_running, parse_clip, source_of, state_json,
 )
 from labelmeme.seed import seed_templates
 from labelmeme.worker import Paths, Worker
@@ -76,11 +76,6 @@ def author_token(password: str) -> str:
     return hmac.new(password.encode(), b"labelmeme-author", hashlib.sha256).hexdigest()
 
 
-def _source_of(job: Job) -> SourceFacts:
-    state = job.state.resume if isinstance(job.state, Failed) else job.state
-    return state.source
-
-
 def _subjects_of(body: SaveTemplate) -> list[dict]:
     if not body.subjects:
         raise ApiError(422, "draw at least one subject", "subjects")
@@ -111,6 +106,7 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
         paths.work_dir.mkdir(parents=True, exist_ok=True)
         paths.templates_dir.mkdir(parents=True, exist_ok=True)
         upload.sweep(paths)
+        jobs.discard_unneeded_sources(paths.sources_dir)
         if site_dir is not None:
             for template_id in seed_templates(site_dir / "templates", paths.templates_dir):
                 log.info("seeded template %s", template_id)
@@ -206,14 +202,14 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
 
     @app.get("/api/jobs/{job_id}/source.mp4")
     def source_video(job_id: str) -> FileResponse:
-        path = youtube.source_path(paths.sources_dir, _source_of(jobs.get(job_id)).video_id)
+        path = youtube.source_path(paths.sources_dir, source_of(jobs.get(job_id).state).video_id)
         if not path.is_file():
             raise ApiError(409, "the video is not downloaded yet")
         return FileResponse(path, media_type="video/mp4")
 
     @app.put("/api/jobs/{job_id}/clip")
     def choose_clip(job_id: str, body: ChooseClip) -> dict:
-        source = _source_of(jobs.get(job_id))
+        source = source_of(jobs.get(job_id).state)
         try:
             clip = parse_clip(start=body.start, end=body.end, title=body.title, credit=body.credit, license=body.license, source=source)
         except ValueError as e:
@@ -248,7 +244,9 @@ def create_app(paths: Paths, web_port: int, password: str | None = None, site_di
             except ValueError as e:
                 raise ApiError(422, str(e), str(e).split(":", 1)[0]) from e
             log.info("saved %s in %.2f s", job_id, time.perf_counter() - started)
-            return job_out(jobs.transition(job_id, Saved()))
+            saved = jobs.transition(job_id, Saved())
+            jobs.discard_unneeded_sources(paths.sources_dir, {source_of(saved.state).video_id})
+            return job_out(saved)
 
     @app.get("/api/templates/{template_id}/draft")
     def get_template_draft(template_id: str) -> dict:

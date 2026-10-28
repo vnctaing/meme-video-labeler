@@ -160,6 +160,19 @@ try {
   let t = await times();
   check(2, t.start === 0 && t.end === 10 && (await lengthText()).trim() === "10.0 s of 30 s max" && (await page.getByRole("button", { name: "Whole video" }).isEnabled()), `the 600 s source opens with 0 to 10 s, "${(await lengthText()).trim()}", zoomed (Whole video enabled)`);
 
+  const fresh = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const mobile = await fresh.newPage();
+  await mobile.goto(`${APP}#/new/long`);
+  await mobile.getByRole("heading", { name: "2. Choose the clip" }).waitFor();
+  await mobile.waitForFunction(() => (document.querySelector("video.source-video")?.readyState ?? 0) >= 1);
+  await mobile.waitForTimeout(1000);
+  const freshBlock = await mobile.getByRole("group", { name: /Selected clip/ }).boundingBox();
+  const freshVideo = await mobile.locator("video.source-video").boundingBox();
+  const freshTicks = await mobile.locator(".trim-ruler > i").count();
+  await fresh.close();
+  const freshRatio = freshBlock === null ? 0 : freshBlock.width / freshVideo.width;
+  check("2a", freshRatio > 0.2 && freshRatio < 0.45 && freshTicks >= 5, `a fresh 390 px load, with no resize after it, draws the 10 s selection at ${(freshRatio * 100).toFixed(0)}% of the video width with ${freshTicks} ruler ticks`);
+
   const e0 = t.end;
   await dragHandle(endHandle, 40);
   await settle();

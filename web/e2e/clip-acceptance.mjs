@@ -217,6 +217,74 @@ try {
     expect(await wholeVideo.isEnabled(), "Whole video is disabled, so the track is not zoomed");
   });
 
+  const freshLoad = async () => {
+    await page.reload();
+    await page.getByRole("heading", { name: /Choose the clip/ }).waitFor();
+    await video.evaluate((v) => (v.readyState >= 1 ? undefined : new Promise((r) => v.addEventListener("loadedmetadata", r, { once: true }))));
+    await settle(1000);
+  };
+  const firstPaint = async (p) => {
+    const v = await p.locator("video").boundingBox();
+    const b = await p.getByRole("group", { name: /Selected clip/ }).boundingBox();
+    const ticks = await p.locator(".trim-ruler > i").count();
+    return { ratio: b === null ? 0 : b.width / v.width, width: b?.width ?? 0, ticks };
+  };
+  const expectFirstPaint = ({ ratio, width, ticks }) => {
+    expect(width > 0, "the selection block has zero width after a fresh load");
+    expect(ratio > 0.2 && ratio < 0.45, `the 10 s selection spans ${(ratio * 100).toFixed(0)}% of the video width, expected about a third of a 30 s view`);
+    expect(ticks >= 5, `the ruler has ${ticks} ticks, expected many`);
+  };
+
+  await check("2a fresh load at 1280 px, no resize or interaction: selection is a third of the track and the ruler is drawn", async () => {
+    expectFirstPaint(await firstPaint(page));
+  });
+
+  await check("2b fresh load at 390 px (context viewport, no resize): selection is a third of the track and the ruler is drawn", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    try {
+      const mobile = await context.newPage();
+      await mobile.goto(`${APP}#/new/${JOB}`);
+      await mobile.getByRole("heading", { name: /Choose the clip/ }).waitFor({ timeout: 30_000 });
+      await mobile.locator("video").evaluate((v) => (v.readyState >= 1 ? undefined : new Promise((r) => v.addEventListener("loadedmetadata", r, { once: true }))));
+      await mobile.waitForTimeout(1000);
+      expectFirstPaint(await firstPaint(mobile));
+    } finally {
+      await context.close();
+    }
+  });
+
+  await check("2c typing 4:30 in Start on a 600 s source viewed at 0:00-0:30 puts the whole selection inside the visible track", async () => {
+    await typeTime(startBox, "4:30");
+    await settle(500);
+    const t = await times();
+    expect(near(t.start, 270, 0.01) && t.end > t.start, `times are ${t.start}-${t.end} after typing 4:30`);
+    const v = await video.boundingBox();
+    const b = await block.boundingBox();
+    expect(b !== null && b.width > 0, "the selection block has no box");
+    expect(b.x >= v.x && b.x + b.width <= v.x + v.width, `selection x=${b.x.toFixed(0)}..${(b.x + b.width).toFixed(0)} is outside the track ${v.x.toFixed(0)}..${(v.x + v.width).toFixed(0)}`);
+    for (const [name, handle] of [["Clip start", handleStart], ["Clip end", handleEnd]]) {
+      const hb = await handle.boundingBox();
+      expect(hb.x + hb.width / 2 >= v.x && hb.x + hb.width / 2 <= v.x + v.width, `${name} is off the visible track`);
+    }
+    await freshLoad();
+  });
+
+  await check("2d Whole video, then dragging the middle of the 10 s selection shifts both ends equally", async () => {
+    await wholeVideo.click();
+    await settle(300);
+    const before = await times();
+    expect(near(before.end - before.start, 10, 0.05), `selection is ${before.end - before.start} s before the drag`);
+    await drag(block, 60);
+    await settle();
+    const after = await times();
+    const ds = after.start - before.start;
+    const de = after.end - before.end;
+    expect(ds > 5, `start moved ${ds.toFixed(2)} s, expected a shift of several seconds`);
+    expect(near(ds, de, 0.11), `start moved ${ds.toFixed(2)} s but end moved ${de.toFixed(2)} s`);
+    expect(near(after.end - after.start, 10, 0.05), `length is ${(after.end - after.start).toFixed(2)} s, expected 10`);
+    await freshLoad();
+  });
+
   await check("3 dragging Clip end 40 px right raises the end and the video follows it", async () => {
     const before = await times();
     const during = await drag(handleEnd, 40);

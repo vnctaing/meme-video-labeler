@@ -219,8 +219,8 @@ try {
   await page.getByLabel("Short name (optional)").fill(ID);
   await page.getByRole("button", { name: "Fetch video" }).click();
   await page.getByRole("heading", { name: "2. Choose the clip" }).waitFor({ timeout: 300_000 });
-  await page.getByLabel("Start", { exact: true }).fill("3:45.1");
-  await page.getByLabel("End", { exact: true }).fill("4:04.5");
+  await page.getByLabel("Start time").fill("3:45.1");
+  await page.getByLabel("End time").fill("4:04.5");
   await page.getByText("Edit", { exact: true }).click();
   await page.getByLabel("Title").fill(TITLE);
   await shot("clip");

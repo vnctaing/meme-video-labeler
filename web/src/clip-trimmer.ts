@@ -114,9 +114,9 @@ export function mountTrimmer(options: TrimmerOptions): Trimmer {
   const overview = div("trim-overview", overviewMark, overviewThumb);
   const timeline = div("trim-timeline", ruler, track, overview);
 
-  const timeInput = (id: string) => el("input", { id, type: "text", inputMode: "decimal", autocomplete: "off", className: "trim-time" });
-  const startInput = timeInput("clip-start");
-  const endInput = timeInput("clip-end");
+  const timeInput = (id: string, label: string) => el("input", { id, type: "text", inputMode: "decimal", autocomplete: "off", className: "trim-time", ariaLabel: label });
+  const startInput = timeInput("clip-start", "Start time");
+  const endInput = timeInput("clip-end", "End time");
   const lengthText = el("strong");
   const lengthLimit = el("small");
   const meterFill = el("i");

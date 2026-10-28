@@ -276,8 +276,8 @@ try {
     await page.getByRole("heading", { name: "2. Choose the clip" }).waitFor();
     assert(page.url().endsWith(`#/new/${SHORT}`), "signing in again returns to the job the author was on");
   } else {
-    await page.getByLabel("Start", { exact: true }).fill("0");
-    await page.getByLabel("End", { exact: true }).fill("30");
+    await page.getByLabel("Start time").fill("0");
+    await page.getByLabel("End time").fill("30");
     await page.getByText("Edit", { exact: true }).click();
     await page.getByLabel("Title").fill(TITLE);
     await page.getByRole("button", { name: /^Use this .*clip/ }).click();

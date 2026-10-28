@@ -276,10 +276,11 @@ try {
     await page.getByRole("heading", { name: "2. Choose the clip" }).waitFor();
     assert(page.url().endsWith(`#/new/${SHORT}`), "signing in again returns to the job the author was on");
   } else {
-    await page.getByLabel("Start (s)").fill("0");
-    await page.getByLabel("End (s)").fill("30");
+    await page.getByLabel("Start", { exact: true }).fill("0");
+    await page.getByLabel("End", { exact: true }).fill("30");
+    await page.getByText("Edit", { exact: true }).click();
     await page.getByLabel("Title").fill(TITLE);
-    await page.getByRole("button", { name: "Use this clip" }).click();
+    await page.getByRole("button", { name: /^Use this .*clip/ }).click();
     await page.getByText("Move to the frame where your first subject appears").waitFor({ timeout: 600_000 });
     log("PASS the job reaches editing");
     const canvas = page.locator("canvas.editor-canvas");

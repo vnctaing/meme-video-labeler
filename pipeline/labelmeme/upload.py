@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import uuid
 from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -55,7 +56,10 @@ def _probe(path: Path) -> tuple[float, int, int]:
     return duration, width, height
 
 
-async def receive(chunks: AsyncIterator[bytes], length: int | None, name: str, paths: Paths) -> SourceFacts:
+async def receive[T](
+    chunks: AsyncIterator[bytes], length: int | None, name: str, paths: Paths,
+    lock: AbstractContextManager, create: Callable[[SourceFacts], T],
+) -> T:
     if length is None:
         raise UploadError(411, "Send the file with its length (Content-Length).")
     if length > MAX_UPLOAD_BYTES:
@@ -75,16 +79,18 @@ async def receive(chunks: AsyncIterator[bytes], length: int | None, name: str, p
         duration, width, height = await asyncio.to_thread(_probe, part)
         video_id = f"upload-{digest.hexdigest()[:16]}"
         target = youtube.source_path(paths.sources_dir, video_id)
-        if not target.is_file():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(part, target)
+        filename = Path(name).name
+        source = SourceFacts(
+            video_id=video_id, url=f"upload:{filename}", title=Path(filename).stem, channel="uploaded file",
+            duration=duration, width=width, height=height,
+        )
+        with lock:
+            if not target.is_file():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(part, target)
+            return create(source)
     finally:
         part.unlink(missing_ok=True)
-    filename = Path(name).name
-    return SourceFacts(
-        video_id=video_id, url=f"upload:{filename}", title=Path(filename).stem, channel="uploaded file",
-        duration=duration, width=width, height=height,
-    )
 
 
 def sweep(paths: Paths) -> None:
@@ -112,13 +118,14 @@ def router(jobs: Jobs, paths: Paths, job_out: Callable[[Job], dict]) -> APIRoute
     ) -> dict | JSONResponse:
         if id is not None and id in jobs.taken():
             return _error(409, f"the name {id!r} is already used by a template or a work directory", "id")
+
+        def create(source: SourceFacts) -> Job:
+            return jobs.create_downloaded(id or derive_id(source.title, jobs.taken()), source)
+
         try:
-            source = await receive(request.stream(), _length(request), name, paths)
+            return job_out(await receive(request.stream(), _length(request), name, paths, jobs.lock, create))
         except UploadError as e:
             return _error(e.status, e.message, "file")
-        job_id = id or derive_id(source.title, jobs.taken())
-        try:
-            return job_out(jobs.create_downloaded(job_id, source))
         except Conflict as e:
             return _error(409, str(e), "id")
 

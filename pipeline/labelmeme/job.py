@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 import threading
 import unicodedata
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -119,6 +120,14 @@ def is_running(state: State) -> bool:
     return isinstance(state, (Downloading, Preparing))
 
 
+def source_of(state: State) -> SourceFacts:
+    return (state.resume if isinstance(state, Failed) else state).source
+
+
+def needs_source(state: State) -> bool:
+    return not isinstance(state, Ready)
+
+
 @dataclass(frozen=True, slots=True)
 class StepDone:
     pass
@@ -176,7 +185,7 @@ def advance(state: State, event: Event) -> State:
             return replace(state, attempts=n + 1)
         case Downloading() | Preparing(), Started():
             return Failed(_step(state), INTERRUPTED.format(n=MAX_ATTEMPTS), replace(state, attempts=0))
-        case Downloaded(source=s) | Editing(source=s) | Ready(source=s) | Failed(resume=Preparing(source=s)), ClipChosen(clip=c):
+        case Downloaded(source=s) | Editing(source=s) | Failed(resume=Preparing(source=s)), ClipChosen(clip=c):
             return Preparing(s, c)
         case Editing(source=s, clip=c) | Ready(source=s, clip=c), Saved():
             return Ready(s, c)
@@ -347,6 +356,10 @@ class Jobs:
         self._lock = threading.RLock()
         self._enqueue = enqueue
 
+    @property
+    def lock(self) -> AbstractContextManager:
+        return self._lock
+
     def _path(self, job_id: str) -> Path:
         return self._work_dir / job_id / "job.json"
 
@@ -430,6 +443,33 @@ class Jobs:
                     if state.kind != "ready":
                         raise Conflict(f"this template's job is {_describe(state)}: finish or redo the job first")
             yield
+
+    def discard_unneeded_sources(self, sources_dir: Path, video_ids: set[str] | None = None) -> None:
+        """Deletes the downloaded videos no unsaved job can still use, limited to video_ids when given.
+        Gives up when any job file cannot be read, because that job might need its source."""
+        with self._lock:
+            needed: set[str] = set()
+            for path in self._work_dir.glob("*/job.json"):
+                try:
+                    state = self._load(path.parent.name).state
+                except ValueError as e:
+                    log.warning("keeping every source because a job cannot be read: %s", e)
+                    return
+                if needs_source(state):
+                    needed.add(source_of(state).video_id)
+            if not sources_dir.is_dir():
+                return
+            for entry in sources_dir.iterdir():
+                if entry.name in needed or (video_ids is not None and entry.name not in video_ids):
+                    continue
+                log.info("deleting the source video %s", entry.name)
+                try:
+                    if entry.is_symlink() or entry.is_file():
+                        entry.unlink()
+                    else:
+                        shutil.rmtree(entry)
+                except OSError as e:
+                    log.warning("could not delete the source video %s: %s", entry.name, e)
 
     def recover(self) -> list[Job]:
         pending = sorted((j for j in self.list() if is_running(j.state)), key=lambda j: j.created_at)

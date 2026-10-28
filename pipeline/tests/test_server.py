@@ -171,3 +171,19 @@ def test_the_environment_picks_the_paths_the_site_and_the_password() -> None:
     assert deployment_from_env(blank) == (Paths(Path("/data/work"), Path("/data/templates")), None, None)
     prod = {"LABELMEME_DATA_DIR": "/data", "LABELMEME_PASSWORD": "pw", "LABELMEME_SITE_DIR": "/app/site"}
     assert deployment_from_env(prod) == (Paths(Path("/data/work"), Path("/data/templates")), Path("/app/site"), "pw")
+
+
+def test_saving_deletes_the_source_and_boot_sweeps_leftovers(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    for video_id in (SOURCE.video_id, "orphan"):
+        (paths.sources_dir / video_id).mkdir(parents=True)
+        (paths.sources_dir / video_id / "source.mp4").write_bytes(b"video")
+    with TestClient(create_app(paths, 5184)) as client:
+        assert (paths.sources_dir / SOURCE.video_id / "source.mp4").is_file()
+        assert not (paths.sources_dir / "orphan").exists()
+        assert _save(client, [{"id": "s1", "name": "Thom", "runs": RUNS}]).status_code == 200
+        assert not (paths.sources_dir / SOURCE.video_id).exists()
+        assert (paths.templates_dir / "job/template.json").is_file()
+        assert (paths.work_dir / "job/video.mp4").is_file()
+        res = client.put("/api/jobs/job/clip", json={"start": 2, "end": 5, "title": "New", "credit": "Me"}, headers=ORIGIN)
+        assert res.status_code == 409

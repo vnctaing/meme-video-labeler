@@ -279,10 +279,7 @@ function stepPanel(job: Job, show: (job: Job) => void): Panel {
         changeClipLink(job.id, state.source, state.clip, show),
       );
     case "ready":
-      return editorPanel(
-        openTemplateEdit(job.id, BASE_URL),
-        changeClipLink(job.id, state.source, state.clip, show),
-      );
+      return editorPanel(openTemplateEdit(job.id, BASE_URL), null);
     case "failed":
       return still(failedPanel(job, state, show));
     default: {

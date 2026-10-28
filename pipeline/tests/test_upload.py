@@ -2,6 +2,8 @@ import asyncio
 import hashlib
 import os
 import subprocess
+import threading
+from contextlib import nullcontext
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -10,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from labelmeme import upload
-from labelmeme.job import Jobs, state_json
+from labelmeme.job import Clip, ClipChosen, Jobs, Saved, StepDone, state_json
 from labelmeme.upload import UploadError, receive, router, sweep
 from labelmeme.worker import Paths
 from labelmeme.youtube import source_path
@@ -111,7 +113,7 @@ async def _chunks(*parts: bytes) -> AsyncIterator[bytes]:
 def test_a_body_longer_than_its_stated_length_is_cut_at_the_cap(paths: Paths, mp4: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(upload, "MAX_UPLOAD_BYTES", len(mp4) - 1)
     with pytest.raises(UploadError) as e:
-        asyncio.run(receive(_chunks(mp4[:100], mp4[100:]), 100, "a.mp4", paths))
+        asyncio.run(receive(_chunks(mp4[:100], mp4[100:]), 100, "a.mp4", paths, nullcontext(), lambda source: source))
     assert e.value.status == 413
     assert _uploads_left(paths) == []
     assert not paths.sources_dir.exists()
@@ -123,3 +125,30 @@ def test_sweep_deletes_uploads_left_by_a_stop(paths: Paths) -> None:
     sweep(paths)
     assert _uploads_left(paths) == []
     sweep(Paths(paths.work_dir / "nowhere", paths.templates_dir))
+
+
+def test_saving_the_last_other_job_on_a_video_cannot_delete_it_under_a_new_upload(paths: Paths, mp4: bytes) -> None:
+    jobs = Jobs(paths.work_dir, paths.templates_dir, lambda job, resumed: None)
+    app = FastAPI()
+    app.include_router(router(jobs, paths, lambda job: {"id": job.id, "state": state_json(job.state)}))
+    with TestClient(app) as c:
+        first = c.post("/api/uploads", params={"name": "a.mp4"}, content=mp4).json()
+        video_id = first["state"]["source"]["videoId"]
+        jobs.transition("a", ClipChosen(Clip(0.0, 1.0, "t", "c", "l")))
+        jobs.transition("a", StepDone())
+        create = jobs.create_downloaded
+        sweeper: list[threading.Thread] = []
+
+        def create_after_a_concurrent_save(job_id, source):
+            jobs.transition("a", Saved())
+            t = threading.Thread(target=jobs.discard_unneeded_sources, args=(paths.sources_dir, {video_id}))
+            t.start()
+            t.join(0.3)
+            sweeper.append(t)
+            return create(job_id, source)
+
+        jobs.create_downloaded = create_after_a_concurrent_save
+        second = c.post("/api/uploads", params={"name": "a.mp4"}, content=mp4)
+        sweeper[0].join()
+    assert second.status_code == 201
+    assert source_path(paths.sources_dir, video_id).read_bytes() == mp4

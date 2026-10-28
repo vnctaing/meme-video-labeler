@@ -21,13 +21,14 @@ import {
   uploadJob,
   uploadProblem,
 } from "./authoring.ts";
+import { toWire } from "./clip-model.ts";
+import { mountTrimmer } from "./clip-trimmer.ts";
 import { type View, el } from "./dom.ts";
 import { type Session, signIn } from "./session.ts";
 import { mountSubjectEditor } from "./subject-editor.ts";
 import type { TemplateId } from "./template.ts";
 
 const BASE_URL = new URL(import.meta.env.BASE_URL, location.href).href;
-const MAX_CLIP_SECONDS = 30;
 const DEFAULT_LICENSE = "unknown, personal use";
 const POLL_MS = 500;
 
@@ -355,19 +356,6 @@ function updateProgress(root: HTMLElement, job: Job | null): void {
 const seconds = (n: number) => `${n.toFixed(1)} s`;
 
 function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, show: (job: Job) => void): HTMLElement {
-  const video = el("video", { src: sourceUrl(id), controls: true, preload: "metadata", className: "source-video" });
-  const duration = source.duration;
-  const initialStart = current?.start ?? 0;
-  const numberInput = (idAttr: string, value: number) =>
-    el("input", { id: idAttr, type: "number", min: "0", max: String(duration), step: "0.1", value: value.toFixed(1) });
-  const rangeInput = (label: string, value: number) =>
-    el("input", { type: "range", min: "0", max: String(duration), step: "0.1", value: String(value), ariaLabel: label });
-  const startInput = numberInput("clip-start", initialStart);
-  const endInput = numberInput("clip-end", current?.end ?? Math.min(duration, initialStart + 10));
-  const startRange = rangeInput("Start slider", Number(startInput.value));
-  const endRange = rangeInput("End slider", Number(endInput.value));
-  const length = el("p", { className: "clip-length" });
-  const error = el("p", { className: "field-error" });
   const text = (idAttr: string, label: string, value: string) => {
     const input = el("input", { id: idAttr, type: "text", value, maxLength: 200 });
     return { input, field: el("div", { className: "field" }, el("label", { htmlFor: idAttr }, label), input) };
@@ -375,103 +363,46 @@ function clipPanel(id: TemplateId, source: SourceFacts, current: Clip | null, sh
   const titleField = text("clip-title", "Title", current?.title ?? source.title);
   const creditField = text("clip-credit", "Credit", current?.credit ?? defaultCredit(source));
   const licenseField = text("clip-license", "License", current?.license ?? DEFAULT_LICENSE);
-  const submit = el("button", { type: "submit" }, current === null ? "Use this clip" : "Use this clip instead");
-
-  const range = () => ({ start: Number(startInput.value), end: Number(endInput.value) });
-  const problem = (): string | null => {
-    const { start, end } = range();
-    if (!(end > start)) return "The end must be after the start.";
-    if (end - start > MAX_CLIP_SECONDS) return `A clip is at most ${MAX_CLIP_SECONDS} s.`;
-    if (end - start < 1) return "A clip is at least 1 s.";
-    if (end > duration) return `The video is ${seconds(duration)} long.`;
-    return null;
-  };
-  const sync = (from: "number" | "range") => {
-    if (from === "range") {
-      startInput.value = Number(startRange.value).toFixed(1);
-      endInput.value = Number(endRange.value).toFixed(1);
-    } else {
-      startRange.value = startInput.value;
-      endRange.value = endInput.value;
-    }
-    const { start, end } = range();
-    length.textContent = `${seconds(Math.max(0, end - start))} of ${MAX_CLIP_SECONDS} s max`;
-    error.textContent = problem() ?? "";
-    submit.disabled = problem() !== null;
-  };
-  const dragEnd = () => {
-    if (Number(endRange.value) - Number(startRange.value) > MAX_CLIP_SECONDS) endRange.value = String(Math.min(duration, Number(startRange.value) + MAX_CLIP_SECONDS));
-    sync("range");
-  };
-  const dragStart = () => {
-    if (Number(endRange.value) - Number(startRange.value) > MAX_CLIP_SECONDS) startRange.value = String(Math.max(0, Number(endRange.value) - MAX_CLIP_SECONDS));
-    sync("range");
-  };
-  startRange.addEventListener("input", () => {
-    dragEnd();
-    video.currentTime = Number(startRange.value);
-  });
-  endRange.addEventListener("input", () => {
-    dragStart();
-    video.currentTime = Number(endRange.value);
-  });
-  startInput.addEventListener("input", () => sync("number"));
-  endInput.addEventListener("input", () => sync("number"));
-
-  const setStart = el("button", { type: "button" }, "Set start here");
-  const setEnd = el("button", { type: "button" }, "Set end here");
-  const playClip = el("button", { type: "button" }, "Play clip");
-  setStart.addEventListener("click", () => {
-    startInput.value = video.currentTime.toFixed(1);
-    sync("number");
-  });
-  setEnd.addEventListener("click", () => {
-    endInput.value = video.currentTime.toFixed(1);
-    sync("number");
-  });
-  let previewing = false;
-  playClip.addEventListener("click", () => {
-    previewing = true;
-    video.currentTime = range().start;
-    void video.play();
-  });
-  video.addEventListener("timeupdate", () => {
-    if (previewing && video.currentTime >= range().end) {
-      video.pause();
-      previewing = false;
-    }
-  });
-
-  const form = el(
-    "form",
-    { className: "clip-form" },
-    video,
-    el("div", { className: "clip-buttons" }, setStart, setEnd, playClip),
-    el("div", { className: "field" }, el("label", { htmlFor: startInput.id }, "Start (s)"), startInput, startRange),
-    el("div", { className: "field" }, el("label", { htmlFor: endInput.id }, "End (s)"), endInput, endRange),
-    length,
-    titleField.field,
-    creditField.field,
-    licenseField.field,
-    error,
-    submit,
+  const fields = [titleField.input, creditField.input, licenseField.input];
+  const error = el("p", { className: "field-error" });
+  const submit = el("button", { type: "submit" });
+  const summaryLine = el("span");
+  const details = el(
+    "details",
+    { className: "clip-details" },
+    el("summary", {}, summaryLine, el("em", {}, "Edit")),
+    el("div", { className: "clip-fields" }, titleField.field, creditField.field, licenseField.field),
   );
+
+  const trimmer = mountTrimmer({ src: sourceUrl(id), duration: source.duration, current, onChange: () => sync(), globalKeys: current === null });
+  const sync = () => {
+    const { start, end } = trimmer.range();
+    submit.textContent = current === null ? `Use this ${seconds(end - start)} clip` : "Use this clip instead";
+    summaryLine.textContent = fields.map((f) => f.value).join(" · ");
+    const empty = fields.some((f) => f.value.trim() === "");
+    submit.disabled = empty;
+    if (empty) details.open = true;
+    error.textContent = empty ? "Title, Credit and License cannot be empty." : "";
+  };
+  for (const f of fields) f.addEventListener("input", sync);
+
+  const form = el("form", { className: "clip-form" }, trimmer.node, details, submit, error);
   form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     submit.disabled = true;
     try {
-      show(await chooseClip(id, { ...range(), title: titleField.input.value, credit: creditField.input.value, license: licenseField.input.value }));
+      show(await chooseClip(id, { ...toWire(trimmer.range()), title: titleField.input.value, credit: creditField.input.value, license: licenseField.input.value }));
     } catch (e) {
       error.textContent = message(e);
       submit.disabled = false;
     }
   });
-  sync("number");
+  sync();
   return el(
     "section",
     { className: "clip-panel" },
     el("h2", {}, current === null ? "2. Choose the clip" : "Change the clip"),
-    el("p", { className: "hint" }, `${source.title} · ${source.channel} · ${seconds(duration)}`),
+    el("p", { className: "hint" }, `${source.title} · ${source.channel} · ${seconds(source.duration)}`),
     current === null ? "" : el("p", { className: "hint" }, "A new clip discards every drawing."),
     form,
   );

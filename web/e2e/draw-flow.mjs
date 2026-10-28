@@ -219,11 +219,14 @@ try {
   await page.getByLabel("Short name (optional)").fill(ID);
   await page.getByRole("button", { name: "Fetch video" }).click();
   await page.getByRole("heading", { name: "2. Choose the clip" }).waitFor({ timeout: 300_000 });
-  await page.getByLabel("Start (s)").fill("225.1");
-  await page.getByLabel("End (s)").fill("244.5");
+  await page.getByLabel("Start time").fill("3:45.1");
+  await page.getByLabel("Start time").press("Enter");
+  await page.getByLabel("End time").fill("4:04.5");
+  await page.getByLabel("End time").press("Enter");
+  await page.getByText("Edit", { exact: true }).click();
   await page.getByLabel("Title").fill(TITLE);
   await shot("clip");
-  await page.getByRole("button", { name: "Use this clip" }).click();
+  await page.getByRole("button", { name: /^Use this .*clip/ }).click();
   await page.getByText("Move to the frame where your first subject appears").waitFor({ timeout: 180_000 });
 
   const work = path.join(PIPELINE, "work", ID);
